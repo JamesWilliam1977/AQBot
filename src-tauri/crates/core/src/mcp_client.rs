@@ -157,6 +157,14 @@ fn configure_stdio_env(cmd: &mut tokio::process::Command, env: &HashMap<String, 
     }
 }
 
+#[cfg(windows)]
+fn hide_windows_console_window(cmd: &mut tokio::process::Command) {
+    cmd.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn hide_windows_console_window(_cmd: &mut tokio::process::Command) {}
+
 /// Convert rmcp Tool to our DiscoveredTool.
 fn tool_to_discovered(tool: &Tool) -> DiscoveredTool {
     DiscoveredTool {
@@ -208,6 +216,7 @@ pub async fn call_tool_stdio(
         TokioChildProcess::new(tokio::process::Command::new(command).configure(move |cmd| {
             cmd.args(&args_clone);
             configure_stdio_env(cmd, &env_clone);
+            hide_windows_console_window(cmd);
         }))
         .map_err(|e| {
             AQBotError::Gateway(format!("Failed to spawn MCP server '{}': {}", command, e))
@@ -244,6 +253,7 @@ pub async fn discover_tools_stdio(
         TokioChildProcess::new(tokio::process::Command::new(command).configure(move |cmd| {
             cmd.args(&args_clone);
             configure_stdio_env(cmd, &env_clone);
+            hide_windows_console_window(cmd);
         }))
         .map_err(|e| {
             AQBotError::Gateway(format!("Failed to spawn MCP server '{}': {}", command, e))

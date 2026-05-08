@@ -30,5 +30,8 @@ zip = "2"
 dirs = "5"
 aqbot-migration = { path = "../migration" }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_Threading"] }
+
 [dev-dependencies]
 tempfile = "3"
