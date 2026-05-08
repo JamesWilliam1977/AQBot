@@ -8,6 +8,7 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 /// Result of a tool call via MCP.
@@ -149,11 +150,173 @@ fn path_score(path: &str) -> usize {
 /// provides an explicit PATH in their custom environment variables.
 fn configure_stdio_env(cmd: &mut tokio::process::Command, env: &HashMap<String, String>) {
     let shell_path = get_shell_path();
-    if !shell_path.is_empty() && !env.contains_key("PATH") {
+    if !shell_path.is_empty() && !env_contains_key_ignore_ascii_case(env, "PATH") {
         cmd.env("PATH", shell_path);
     }
     for (k, v) in env {
         cmd.env(k, v);
+    }
+}
+
+#[derive(Debug, Clone)]
+struct StdioCommandResolution {
+    program: String,
+    attempted_candidates: Vec<String>,
+}
+
+fn resolve_stdio_command(command: &str, env: &HashMap<String, String>) -> StdioCommandResolution {
+    #[cfg(windows)]
+    {
+        resolve_windows_stdio_command_for_env(command, env).unwrap_or_else(|| {
+            StdioCommandResolution {
+                program: command.to_string(),
+                attempted_candidates: windows_stdio_command_attempts_for_env(command, env),
+            }
+        })
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = env;
+        StdioCommandResolution {
+            program: command.to_string(),
+            attempted_candidates: Vec::new(),
+        }
+    }
+}
+
+fn env_contains_key_ignore_ascii_case(env: &HashMap<String, String>, key: &str) -> bool {
+    env.keys().any(|k| k.eq_ignore_ascii_case(key))
+}
+
+fn env_get_ignore_ascii_case<'a>(
+    env: &'a HashMap<String, String>,
+    key: &str,
+) -> Option<&'a str> {
+    env.iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(key))
+        .map(|(_, v)| v.as_str())
+}
+
+fn resolve_windows_stdio_command_for_env(
+    command: &str,
+    env: &HashMap<String, String>,
+) -> Option<StdioCommandResolution> {
+    let attempted_candidates = windows_stdio_command_attempts_for_env(command, env);
+    let program = attempted_candidates
+        .iter()
+        .find(|candidate| Path::new(candidate.as_str()).is_file())
+        .cloned()?;
+
+    Some(StdioCommandResolution {
+        program,
+        attempted_candidates,
+    })
+}
+
+fn windows_stdio_command_attempts_for_env(
+    command: &str,
+    env: &HashMap<String, String>,
+) -> Vec<String> {
+    if !should_resolve_windows_stdio_command(command) {
+        return Vec::new();
+    }
+
+    let Some(path_value) = effective_windows_path(env) else {
+        return Vec::new();
+    };
+
+    let extensions = windows_path_extensions(env, command);
+    path_value
+        .split(';')
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .flat_map(|dir| {
+            extensions.iter().map(move |ext| {
+                PathBuf::from(dir)
+                    .join(format!("{command}{ext}"))
+                    .to_string_lossy()
+                    .to_string()
+            })
+        })
+        .collect()
+}
+
+fn should_resolve_windows_stdio_command(command: &str) -> bool {
+    if command.trim().is_empty() || command.contains('/') || command.contains('\\') {
+        return false;
+    }
+
+    Path::new(command).extension().is_none()
+}
+
+fn effective_windows_path(env: &HashMap<String, String>) -> Option<String> {
+    env_get_ignore_ascii_case(env, "PATH")
+        .map(str::to_string)
+        .or_else(|| {
+            let shell_path = get_shell_path();
+            if shell_path.is_empty() {
+                None
+            } else {
+                Some(shell_path.to_string())
+            }
+        })
+}
+
+fn windows_path_extensions(env: &HashMap<String, String>, command: &str) -> Vec<String> {
+    let mut extensions = Vec::new();
+    let mut seen = HashSet::new();
+    let command_lower = command.to_ascii_lowercase();
+
+    if command_lower == "npx" || command_lower == "npm" {
+        push_windows_extension(&mut extensions, &mut seen, ".cmd");
+    }
+
+    let raw = env_get_ignore_ascii_case(env, "PATHEXT").unwrap_or(".COM;.EXE;.BAT;.CMD");
+    for ext in raw.split(';') {
+        push_windows_extension(&mut extensions, &mut seen, ext);
+    }
+
+    extensions
+}
+
+fn push_windows_extension(extensions: &mut Vec<String>, seen: &mut HashSet<String>, ext: &str) {
+    let mut normalized = ext.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return;
+    }
+    if !normalized.starts_with('.') {
+        normalized.insert(0, '.');
+    }
+    if seen.insert(normalized.clone()) {
+        extensions.push(normalized);
+    }
+}
+
+fn spawn_mcp_stdio_error(
+    command: &str,
+    resolution: &StdioCommandResolution,
+    error: std::io::Error,
+) -> AQBotError {
+    let message = format!("Failed to spawn MCP server '{}': {}", command, error);
+
+    #[cfg(windows)]
+    {
+        let mut message = message;
+        if resolution.program == command && should_resolve_windows_stdio_command(command) {
+            message.push_str(
+                ". On Windows, AQBot tried resolving the command via PATH/PATHEXT \
+                 (including .cmd/.bat/.exe wrappers). Check the PATH visible to AQBot \
+                 or configure an absolute command path such as C:\\Program Files\\nodejs\\npx.cmd",
+            );
+        }
+        return AQBotError::Gateway(message);
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = &resolution.attempted_candidates;
+        AQBotError::Gateway(message)
     }
 }
 
@@ -211,16 +374,16 @@ pub async fn call_tool_stdio(
 ) -> Result<McpToolResult> {
     let env_clone = env.clone();
     let args_clone: Vec<String> = args.to_vec();
+    let resolution = resolve_stdio_command(command, env);
+    let program = resolution.program.clone();
 
     let transport =
-        TokioChildProcess::new(tokio::process::Command::new(command).configure(move |cmd| {
+        TokioChildProcess::new(tokio::process::Command::new(program).configure(move |cmd| {
             cmd.args(&args_clone);
             configure_stdio_env(cmd, &env_clone);
             hide_windows_console_window(cmd);
         }))
-        .map_err(|e| {
-            AQBotError::Gateway(format!("Failed to spawn MCP server '{}': {}", command, e))
-        })?;
+        .map_err(|e| spawn_mcp_stdio_error(command, &resolution, e))?;
 
     let client = ()
         .serve(transport)
@@ -248,16 +411,16 @@ pub async fn discover_tools_stdio(
 ) -> Result<Vec<DiscoveredTool>> {
     let env_clone = env.clone();
     let args_clone: Vec<String> = args.to_vec();
+    let resolution = resolve_stdio_command(command, env);
+    let program = resolution.program.clone();
 
     let transport =
-        TokioChildProcess::new(tokio::process::Command::new(command).configure(move |cmd| {
+        TokioChildProcess::new(tokio::process::Command::new(program).configure(move |cmd| {
             cmd.args(&args_clone);
             configure_stdio_env(cmd, &env_clone);
             hide_windows_console_window(cmd);
         }))
-        .map_err(|e| {
-            AQBotError::Gateway(format!("Failed to spawn MCP server '{}': {}", command, e))
-        })?;
+        .map_err(|e| spawn_mcp_stdio_error(command, &resolution, e))?;
 
     let client = ()
         .serve(transport)
@@ -680,16 +843,81 @@ mod tests {
         assert_eq!(env_map.get("PATH"), Some(&Some("/custom/bin".to_string())));
     }
 
+    #[test]
+    fn stdio_env_treats_path_key_case_insensitively() {
+        let mut env = HashMap::new();
+        env.insert("Path".to_string(), "/custom/bin".to_string());
+
+        let mut cmd = tokio::process::Command::new("python3");
+        configure_stdio_env(&mut cmd, &env);
+
+        let env_map: HashMap<String, Option<String>> = cmd
+            .as_std()
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().to_string(),
+                    value.map(|v| v.to_string_lossy().to_string()),
+                )
+            })
+            .collect();
+
+        assert_eq!(env_map.get("Path"), Some(&Some("/custom/bin".to_string())));
+        assert!(
+            !env_map.contains_key("PATH"),
+            "custom Path should prevent AQBot from injecting a separate PATH"
+        );
+    }
+
+    #[test]
+    fn windows_stdio_command_resolves_npx_cmd_from_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let npx = dir.path().join("npx.cmd");
+        fs::write(&npx, "@echo off\r\n").unwrap();
+
+        let mut env = HashMap::new();
+        env.insert("Path".to_string(), dir.path().to_string_lossy().to_string());
+        env.insert("PATHEXT".to_string(), ".COM;.EXE;.BAT;.CMD".to_string());
+
+        let resolved = resolve_windows_stdio_command_for_env("npx", &env).unwrap();
+
+        assert_eq!(resolved.program, npx.to_string_lossy());
+    }
+
+    #[test]
+    fn windows_stdio_command_keeps_existing_cmd_extension() {
+        let resolved = resolve_windows_stdio_command_for_env("npx.cmd", &HashMap::new());
+
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn windows_stdio_command_reports_attempted_candidates_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut env = HashMap::new();
+        env.insert("Path".to_string(), dir.path().to_string_lossy().to_string());
+        env.insert("PATHEXT".to_string(), ".EXE;.CMD".to_string());
+
+        let attempts = windows_stdio_command_attempts_for_env("missing", &env);
+
+        assert!(attempts.iter().any(|path| path.ends_with("missing.exe")));
+        assert!(attempts.iter().any(|path| path.ends_with("missing.cmd")));
+    }
+
     #[tokio::test]
     async fn call_tool_stdio_does_not_hang_when_initialize_stdout_is_non_json_then_eof() {
         let args = vec!["-c".to_string(), "print('npm notice')".to_string()];
+        let mut env = HashMap::new();
+        if let Ok(path) = std::env::var("PATH") {
+            env.insert("PATH".to_string(), path);
+        }
 
         let result = tokio::time::timeout(
-            std::time::Duration::from_millis(500),
+            std::time::Duration::from_secs(5),
             call_tool_stdio(
                 "python3",
                 &args,
-                &HashMap::new(),
+                &env,
                 "fetch_url",
                 serde_json::json!({}),
             ),
