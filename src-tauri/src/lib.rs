@@ -10,13 +10,16 @@ use tokio::sync::Mutex;
 use std::os::unix::fs::PermissionsExt;
 
 use std::path::PathBuf;
-use tauri::{LogicalPosition, LogicalSize, Position, Size};
 
 pub struct AppState {
     pub sea_db: DatabaseConnection,
     pub master_key: [u8; 32],
     pub gateway: Arc<Mutex<Option<aqbot_gateway::server::GatewayServer>>>,
     pub close_to_tray: Arc<AtomicBool>,
+    pub release_webview_on_tray: Arc<AtomicBool>,
+    pub main_window_released_to_tray: Arc<AtomicBool>,
+    pub main_window_restoring: Arc<AtomicBool>,
+    pub is_quitting: Arc<AtomicBool>,
     pub app_data_dir: PathBuf,
     pub db_path: String,
     pub auto_backup_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
@@ -38,6 +41,7 @@ mod context_manager;
 mod indexing;
 mod paths;
 mod tray;
+mod window_lifecycle;
 mod window_state;
 
 #[cfg(target_os = "windows")]
@@ -56,10 +60,7 @@ pub fn run() {
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
+            window_lifecycle::restore_main_window(app);
         }))
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
@@ -261,6 +262,7 @@ pub fn run() {
             commands::desktop::get_window_state,
             commands::desktop::set_always_on_top,
             commands::desktop::set_close_to_tray,
+            commands::desktop::set_release_webview_on_tray,
             commands::desktop::force_quit,
             commands::desktop::apply_startup_settings,
             commands::desktop::test_proxy,
@@ -462,7 +464,11 @@ pub fn run() {
                 sea_db: db_handle.conn,
                 master_key,
                 gateway: Arc::new(Mutex::new(None)),
-                close_to_tray: Arc::new(AtomicBool::new(false)),
+                close_to_tray: Arc::new(AtomicBool::new(app_settings.minimize_to_tray)),
+                release_webview_on_tray: Arc::new(AtomicBool::new(app_settings.release_webview_on_tray)),
+                main_window_released_to_tray: Arc::new(AtomicBool::new(false)),
+                main_window_restoring: Arc::new(AtomicBool::new(false)),
+                is_quitting: Arc::new(AtomicBool::new(false)),
                 app_data_dir: app_dir.clone(),
                 db_path: db_path,
                 auto_backup_handle: Arc::new(Mutex::new(None)),
@@ -482,48 +488,7 @@ pub fn run() {
             }
 
             if let Some(main_window) = app.get_webview_window("main") {
-                // On Windows, hide native decorations so the custom TitleBar is
-                // the only title bar.  macOS keeps its Overlay style (traffic lights).
-                // After removing decorations, re-enable minimize/maximize capabilities
-                // since set_decorations(false) strips the WS_MINIMIZEBOX/WS_MAXIMIZEBOX styles.
-                #[cfg(target_os = "windows")]
-                {
-                    let _ = main_window.set_decorations(false);
-                    let _ = main_window.set_minimizable(true);
-                    let _ = main_window.set_maximizable(true);
-                }
-
-                if let Some(saved_state) = window_state::load_window_state(&app_dir) {
-                    let restored_state = if let Ok(Some(monitor)) = main_window.current_monitor() {
-                        let monitor_size = monitor
-                            .size()
-                            .to_logical::<f64>(main_window.scale_factor().unwrap_or(1.0));
-                        window_state::clamp_window_state_to_monitor(
-                            saved_state,
-                            monitor_size.width,
-                            monitor_size.height,
-                        )
-                    } else {
-                        saved_state
-                    };
-
-                    let _ = main_window.set_size(Size::Logical(LogicalSize::new(
-                        restored_state.width,
-                        restored_state.height,
-                    )));
-
-                    if let (Some(x), Some(y)) = (restored_state.x, restored_state.y) {
-                        let _ = main_window.set_position(Position::Logical(LogicalPosition::new(x, y)));
-                    } else {
-                        let _ = main_window.center();
-                    }
-
-                    if restored_state.fullscreen {
-                        let _ = main_window.set_fullscreen(true);
-                    } else if restored_state.maximized {
-                        let _ = main_window.maximize();
-                    }
-                }
+                window_lifecycle::configure_main_window(app.handle(), &main_window);
             }
 
             // Initialize auto-backup scheduler if enabled
@@ -678,7 +643,7 @@ pub fn run() {
                         let app = window.app_handle();
                         let state = app.state::<AppState>();
                         if state.close_to_tray.load(Ordering::Relaxed) {
-                            let _ = window.hide();
+                            let _ = window_lifecycle::release_main_window_to_tray(window);
                             api.prevent_close();
                         } else {
                             // Ask frontend for confirmation before quitting
@@ -726,6 +691,15 @@ pub fn run() {
     };
 
     app.run(|app, event| {
+        if let tauri::RunEvent::ExitRequested { api, .. } = &event {
+            let state = app.state::<AppState>();
+            if state.main_window_released_to_tray.load(Ordering::Relaxed)
+                && !state.is_quitting.load(Ordering::Relaxed)
+            {
+                api.prevent_exit();
+            }
+        }
+
         #[cfg(target_os = "macos")]
         if let tauri::RunEvent::Reopen {
             has_visible_windows,
@@ -733,10 +707,7 @@ pub fn run() {
         } = event
         {
             if !has_visible_windows {
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.show();
-                    let _ = w.set_focus();
-                }
+                window_lifecycle::restore_main_window(app);
             }
         }
     });

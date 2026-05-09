@@ -387,6 +387,7 @@
     "autoStart": "Запуск при старте",
     "showOnStart": "Показывать при запуске",
     "minimizeToTray": "Сворачивать в трей при закрытии",
+    "releaseWebviewOnTray": "Освобождать WebView при отправке в трей",
     "fontSize": "Размер шрифта",
     "fontWeight": "Насыщенность шрифта",
     "fontFamily": "Глобальный шрифт",

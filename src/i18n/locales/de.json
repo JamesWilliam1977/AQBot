@@ -387,6 +387,7 @@
     "autoStart": "Bei Systemstart starten",
     "showOnStart": "Beim Start anzeigen",
     "minimizeToTray": "Beim Schließen in die Taskleiste minimieren",
+    "releaseWebviewOnTray": "WebView beim Ablegen im Tray freigeben",
     "fontSize": "Schriftgröße",
     "fontWeight": "Schriftstärke",
     "fontFamily": "Globale Schriftart",

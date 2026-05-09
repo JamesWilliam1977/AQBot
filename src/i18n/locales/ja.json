@@ -387,6 +387,7 @@
     "autoStart": "起動時に開始",
     "showOnStart": "起動時に表示",
     "minimizeToTray": "閉じたときにトレイに最小化",
+    "releaseWebviewOnTray": "トレイ格納時に WebView を解放",
     "fontSize": "フォントサイズ",
     "fontWeight": "フォントウェイト",
     "fontFamily": "グローバルフォント",

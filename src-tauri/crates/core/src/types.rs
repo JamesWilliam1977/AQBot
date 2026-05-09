@@ -672,6 +672,7 @@ pub struct AppSettings {
     pub mini_window_enabled: bool,
     pub start_minimized: bool,
     pub close_to_tray: bool,
+    pub release_webview_on_tray: bool,
     pub notify_backup: bool,
     pub notify_import: bool,
     pub notify_errors: bool,
@@ -780,6 +781,7 @@ impl Default for AppSettings {
             mini_window_enabled: false,
             start_minimized: false,
             close_to_tray: true,
+            release_webview_on_tray: false,
             notify_backup: true,
             notify_import: true,
             notify_errors: true,
@@ -805,6 +807,31 @@ impl Default for AppSettings {
             multi_model_display_mode: "tabs".to_string(),
             render_user_markdown: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod app_settings_tests {
+    use super::AppSettings;
+    use serde_json::json;
+
+    #[test]
+    fn release_webview_on_tray_defaults_to_disabled() {
+        let settings = AppSettings::default();
+        assert!(!settings.release_webview_on_tray);
+    }
+
+    #[test]
+    fn release_webview_on_tray_roundtrips_and_defaults_when_missing() {
+        let settings: AppSettings = serde_json::from_value(json!({
+            "release_webview_on_tray": true
+        }))
+        .expect("settings should deserialize");
+        assert!(settings.release_webview_on_tray);
+
+        let settings: AppSettings =
+            serde_json::from_value(json!({})).expect("settings should default missing fields");
+        assert!(!settings.release_webview_on_tray);
     }
 }
 

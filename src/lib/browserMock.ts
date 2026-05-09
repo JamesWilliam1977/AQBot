@@ -371,6 +371,8 @@ const DEFAULT_SETTINGS = {
   primary_color: '#17A93D',
   font_size: 14,
   language: 'zh-CN',
+  minimize_to_tray: true,
+  release_webview_on_tray: false,
   send_on_enter: true,
   stream_response: true,
   global_shortcut: 'CmdOrCtrl+Shift+A',
@@ -1479,6 +1481,9 @@ export async function handleCommand<T>(cmd: string, args?: Record<string, unknow
       return undefined as T;
     case 'set_close_to_tray':
       console.log('[Mock] set_close_to_tray:', (args as any)?.enabled);
+      return undefined as T;
+    case 'set_release_webview_on_tray':
+      console.log('[Mock] set_release_webview_on_tray:', (args as any)?.enabled);
       return undefined as T;
     case 'apply_startup_settings':
       console.log('[Mock] apply_startup_settings:', args);

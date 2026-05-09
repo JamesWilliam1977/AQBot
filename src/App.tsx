@@ -28,7 +28,9 @@ const { useToken } = theme;
 async function showWindow() {
   try {
     const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
-    await getCurrentWebviewWindow().show();
+    const window = getCurrentWebviewWindow();
+    await window.show();
+    await window.setFocus();
   } catch (e) {
     console.warn('Failed to show window:', e);
   }
@@ -176,6 +178,7 @@ function AppRoot() {
         await tauriInvoke('apply_startup_settings', {
           alwaysOnTop: settings.always_on_top ?? false,
           closeToTray: settings.minimize_to_tray ?? false,
+          releaseWebviewOnTray: settings.release_webview_on_tray ?? false,
         });
       } catch (e) {
         console.warn('Failed to apply native settings:', e);

@@ -387,6 +387,7 @@
     "autoStart": "बूट पर शुरू करें",
     "showOnStart": "शुरू होने पर दिखाएँ",
     "minimizeToTray": "बंद करने पर ट्रे में छोटा करें",
+    "releaseWebviewOnTray": "ट्रे में भेजने पर WebView रिलीज़ करें",
     "fontSize": "फ़ॉन्ट आकार",
     "fontWeight": "फ़ॉन्ट वेट",
     "fontFamily": "वैश्विक फ़ॉन्ट",

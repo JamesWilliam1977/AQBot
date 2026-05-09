@@ -74,6 +74,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   mini_window_enabled: false,
   start_minimized: false,
   close_to_tray: true,
+  release_webview_on_tray: false,
   notify_backup: true,
   notify_import: true,
   notify_errors: true,

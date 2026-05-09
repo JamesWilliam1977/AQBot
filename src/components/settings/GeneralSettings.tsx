@@ -107,6 +107,20 @@ export function GeneralSettings() {
             }}
           />
         </div>
+        <Divider style={{ margin: '4px 0' }} />
+        <div style={rowStyle} className="flex items-center justify-between">
+          <span>{t('settings.releaseWebviewOnTray')}</span>
+          <Switch
+            checked={settings.minimize_to_tray ? (settings.release_webview_on_tray ?? false) : false}
+            disabled={!inTauri || !settings.minimize_to_tray}
+            onChange={(checked) => {
+              saveSettings({ release_webview_on_tray: checked });
+              if (inTauri) {
+                invoke('set_release_webview_on_tray', { enabled: checked }).catch(() => {});
+              }
+            }}
+          />
+        </div>
       </SettingsGroup>
     </div>
   );

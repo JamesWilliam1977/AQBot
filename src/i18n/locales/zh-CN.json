@@ -387,6 +387,7 @@
     "autoStart": "开机自启动",
     "showOnStart": "启动时显示窗口",
     "minimizeToTray": "关闭时最小化到托盘",
+    "releaseWebviewOnTray": "关闭/最小化到托盘时释放界面进程",
     "fontSize": "字体大小",
     "fontWeight": "字体粗细",
     "fontFamily": "全局字体",

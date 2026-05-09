@@ -59,12 +59,13 @@ pub fn create_tray(app: &AppHandle, language: &str) -> Result<(), Box<dyn std::e
         .tooltip("AQBot")
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => {
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.show();
-                    let _ = w.set_focus();
-                }
+                crate::window_lifecycle::restore_main_window(app);
             }
             "quit" => {
+                let state = app.state::<crate::AppState>();
+                state
+                    .is_quitting
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
                 app.exit(0);
             }
             _ => {}
@@ -79,11 +80,12 @@ pub fn create_tray(app: &AppHandle, language: &str) -> Result<(), Box<dyn std::e
                 let app = tray.app_handle();
                 if let Some(w) = app.get_webview_window("main") {
                     if w.is_visible().unwrap_or(false) {
-                        let _ = w.hide();
+                        let _ = crate::window_lifecycle::release_webview_window_to_tray(&w);
                     } else {
-                        let _ = w.show();
-                        let _ = w.set_focus();
+                        crate::window_lifecycle::restore_main_window(app);
                     }
+                } else {
+                    crate::window_lifecycle::restore_main_window(app);
                 }
             }
         })

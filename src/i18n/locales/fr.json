@@ -387,6 +387,7 @@
     "autoStart": "Démarrer au démarrage",
     "showOnStart": "Afficher au démarrage",
     "minimizeToTray": "Réduire dans la zone de notification à la fermeture",
+    "releaseWebviewOnTray": "Libérer WebView lors de l'envoi dans la zone de notification",
     "fontSize": "Taille de police",
     "fontWeight": "Graisse de police",
     "fontFamily": "Police globale",

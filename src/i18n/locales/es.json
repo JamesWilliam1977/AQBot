@@ -387,6 +387,7 @@
     "autoStart": "Iniciar al arrancar",
     "showOnStart": "Mostrar al iniciar",
     "minimizeToTray": "Minimizar a la bandeja al cerrar",
+    "releaseWebviewOnTray": "Liberar WebView al enviar a la bandeja",
     "fontSize": "Tamaño de fuente",
     "fontWeight": "Peso de fuente",
     "fontFamily": "Fuente global",

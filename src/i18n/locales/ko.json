@@ -387,6 +387,7 @@
     "autoStart": "시작 시 실행",
     "showOnStart": "시작 시 표시",
     "minimizeToTray": "닫을 때 트레이로 최소화",
+    "releaseWebviewOnTray": "트레이로 보낼 때 WebView 해제",
     "fontSize": "글꼴 크기",
     "fontWeight": "글꼴 굵기",
     "fontFamily": "전역 글꼴",

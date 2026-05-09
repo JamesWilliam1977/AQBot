@@ -387,6 +387,7 @@
     "autoStart": "Start on Boot",
     "showOnStart": "Show on Start",
     "minimizeToTray": "Minimize to Tray on Close",
+    "releaseWebviewOnTray": "Release WebView when sent to tray",
     "fontSize": "Font Size",
     "fontWeight": "Font Weight",
     "fontFamily": "Global Font",

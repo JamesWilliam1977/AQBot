@@ -1,10 +1,10 @@
 use crate::AppState;
 use std::sync::atomic::Ordering;
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 
 #[tauri::command]
 pub async fn minimize_window(window: tauri::Window) -> Result<(), String> {
-    window.minimize().map_err(|e| e.to_string())
+    crate::window_lifecycle::minimize_main_window(window)
 }
 
 #[tauri::command]
@@ -29,22 +29,40 @@ pub async fn set_close_to_tray(app: tauri::AppHandle, enabled: bool) -> Result<(
 }
 
 #[tauri::command]
+pub async fn set_release_webview_on_tray(
+    app: tauri::AppHandle,
+    enabled: bool,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    state
+        .release_webview_on_tray
+        .store(enabled, Ordering::Relaxed);
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn apply_startup_settings(
     window: tauri::Window,
     app: tauri::AppHandle,
     always_on_top: bool,
     close_to_tray: bool,
+    release_webview_on_tray: bool,
 ) -> Result<(), String> {
     window
         .set_always_on_top(always_on_top)
         .map_err(|e| e.to_string())?;
     let state = app.state::<AppState>();
     state.close_to_tray.store(close_to_tray, Ordering::Relaxed);
+    state
+        .release_webview_on_tray
+        .store(release_webview_on_tray, Ordering::Relaxed);
     Ok(())
 }
 
 #[tauri::command]
 pub async fn force_quit(app: tauri::AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    state.is_quitting.store(true, Ordering::Relaxed);
     app.exit(0);
     Ok(())
 }

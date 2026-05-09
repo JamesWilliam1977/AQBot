@@ -434,6 +434,7 @@ export interface AppSettings {
   mini_window_enabled?: boolean;
   start_minimized?: boolean;
   close_to_tray?: boolean;
+  release_webview_on_tray?: boolean;
   notify_backup?: boolean;
   notify_import?: boolean;
   notify_errors?: boolean;

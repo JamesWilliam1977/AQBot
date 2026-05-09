@@ -387,6 +387,7 @@
     "autoStart": "التشغيل عند الإقلاع",
     "showOnStart": "الإظهار عند التشغيل",
     "minimizeToTray": "التصغير إلى شريط النظام عند الإغلاق",
+    "releaseWebviewOnTray": "تحرير WebView عند الإرسال إلى شريط النظام",
     "fontSize": "حجم الخط",
     "fontWeight": "سماكة الخط",
     "fontFamily": "الخط العام",
