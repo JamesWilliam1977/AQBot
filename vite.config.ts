@@ -40,8 +40,27 @@ function shikiLanguageFilter(): Plugin {
   };
 }
 
+function stripLinkedDistPureAnnotations(): Plugin {
+  const markstreamReactDist = "/libs/markstream-vue/packages/markstream-react/dist/";
+
+  return {
+    name: "strip-linked-dist-pure-annotations",
+    enforce: "pre",
+    transform(code, id) {
+      if (!id.replaceAll("\\", "/").includes(markstreamReactDist) || !code.includes("@__PURE__")) {
+        return null;
+      }
+
+      return {
+        code: code.replace(/\/\*\s*@__PURE__\s*\*\//g, ""),
+        map: null,
+      };
+    },
+  };
+}
+
 export default defineConfig(async () => ({
-  plugins: [react(), tailwindcss(), monacoEditorPlugin({}), shikiLanguageFilter()],
+  plugins: [react(), tailwindcss(), monacoEditorPlugin({}), shikiLanguageFilter(), stripLinkedDistPureAnnotations()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
@@ -62,5 +81,8 @@ export default defineConfig(async () => ({
     globals: true,
     setupFiles: ["./src/test/setup.ts"],
     include: ["src/**/*.{test,spec}.{ts,tsx}"],
+  },
+  build: {
+    chunkSizeWarningLimit: 9000,
   },
 }));

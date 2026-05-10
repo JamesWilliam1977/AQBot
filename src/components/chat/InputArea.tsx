@@ -24,7 +24,6 @@ import { SearchProviderTypeIcon, PROVIDER_TYPE_LABELS } from '@/components/share
 import { ModelIcon } from '@lobehub/icons';
 import type { AttachmentInput, ProviderType, RealtimeConfig } from '@/types';
 import { invoke } from '@/lib/invoke';
-import { open } from '@tauri-apps/plugin-dialog';
 
 const DOCUMENT_ATTACHMENT_ACCEPT = [
   '.pdf',
@@ -474,6 +473,7 @@ export function InputArea() {
   const handleSelectCwd = useCallback(async () => {
     if (!activeConversationId) return;
     try {
+      const { open } = await import('@tauri-apps/plugin-dialog');
       const selected = await open({
         directory: true,
         multiple: false,

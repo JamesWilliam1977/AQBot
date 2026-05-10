@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { writeText as tauriWriteText } from '@tauri-apps/plugin-clipboard-manager';
 
 async function writeToClipboard(text: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(text);
   } catch {
     // Fallback to Tauri native clipboard (survives expired user gesture)
-    await tauriWriteText(text);
+    const { writeText } = await import('@tauri-apps/plugin-clipboard-manager');
+    await writeText(text);
   }
 }
 

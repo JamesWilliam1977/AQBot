@@ -174,8 +174,7 @@ function AppRoot() {
 
       // Apply native window settings
       try {
-        const { invoke: tauriInvoke } = await import('@tauri-apps/api/core');
-        await tauriInvoke('apply_startup_settings', {
+        await invoke('apply_startup_settings', {
           alwaysOnTop: settings.always_on_top ?? false,
           closeToTray: settings.minimize_to_tray ?? false,
           releaseWebviewOnTray: settings.release_webview_on_tray ?? false,

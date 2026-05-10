@@ -3,7 +3,6 @@ export { SettingsGroup } from './SettingsGroup';
 export { SettingsSelect } from './SettingsSelect';
 export { ProviderSettings } from './ProviderSettings';
 export { ProviderList } from './ProviderList';
-export { ProviderDetail } from './ProviderDetail';
 export { GeneralSettings } from './GeneralSettings';
 export { DisplaySettings } from './DisplaySettings';
 export { ProxySettings } from './ProxySettings';

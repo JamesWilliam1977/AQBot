@@ -9,6 +9,7 @@ import { isTauri, invoke } from '@/lib/invoke';
 import { getShortcutBinding, formatShortcutForDisplay } from '@/lib/shortcuts';
 import { useUpdateChecker } from '@/hooks/useUpdateChecker';
 import appLogo from '@/assets/image/logo.png';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 
 const IS_WINDOWS = navigator.userAgent.includes('Windows');
 
@@ -124,7 +125,6 @@ export function TitleBar() {
     if (!IS_WINDOWS || !isTauri()) return;
     let unlisten: (() => void) | undefined;
     (async () => {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
       const win = getCurrentWindow();
       setIsMaximized(await win.isMaximized());
       unlisten = await win.onResized(async () => {
@@ -143,7 +143,6 @@ export function TitleBar() {
   }, []);
 
   const handleWindowClose = useCallback(async () => {
-    const { getCurrentWindow } = await import('@tauri-apps/api/window');
     await getCurrentWindow().close();
   }, []);
 
@@ -334,23 +333,12 @@ export function TitleBar() {
     }
   };
 
-  // Pre-load Tauri window module for synchronous drag calls
-  const tauriWindowRef = useRef<typeof import('@tauri-apps/api/window') | null>(null);
-  useEffect(() => {
-    if (isTauri()) {
-      import('@tauri-apps/api/window').then((mod) => {
-        tauriWindowRef.current = mod;
-      });
-    }
-  }, []);
-
   const dragTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleDragMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
     if (target.closest('button')) return;
-    const mod = tauriWindowRef.current;
-    if (!mod) return;
+    if (!isTauri()) return;
     e.preventDefault();
 
     if (IS_WINDOWS) {
@@ -359,10 +347,10 @@ export function TitleBar() {
       // the onDoubleClick handler fires and cancels the pending drag.
       if (dragTimerRef.current) clearTimeout(dragTimerRef.current);
       dragTimerRef.current = setTimeout(() => {
-        mod.getCurrentWindow().startDragging();
+        getCurrentWindow().startDragging();
       }, 200);
     } else {
-      mod.getCurrentWindow().startDragging();
+      getCurrentWindow().startDragging();
     }
   }, []);
 

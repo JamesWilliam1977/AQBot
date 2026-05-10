@@ -1,3 +1,5 @@
+import { preloadExtendedLanguageIcons } from 'markstream-react';
+
 let preloadPromise: Promise<void> | null = null;
 
 export function preloadChatRenderers(): Promise<void> {
@@ -5,15 +7,9 @@ export function preloadChatRenderers(): Promise<void> {
 
   preloadPromise = (async () => {
     try {
-      const [
-        markstream,
-        streamMonacoModule,
-      ] = await Promise.all([
-        import('markstream-react'),
-        import('stream-monaco'),
-      ]);
+      const streamMonacoModule = await import('stream-monaco');
 
-      void markstream.preloadExtendedLanguageIcons();
+      void preloadExtendedLanguageIcons();
 
       void streamMonacoModule;
     } catch (e) {

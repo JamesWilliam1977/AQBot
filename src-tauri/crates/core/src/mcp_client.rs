@@ -8,6 +8,7 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+#[cfg(windows)]
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -189,6 +190,7 @@ fn env_contains_key_ignore_ascii_case(env: &HashMap<String, String>, key: &str) 
     env.keys().any(|k| k.eq_ignore_ascii_case(key))
 }
 
+#[cfg(windows)]
 fn env_get_ignore_ascii_case<'a>(
     env: &'a HashMap<String, String>,
     key: &str,
@@ -198,6 +200,7 @@ fn env_get_ignore_ascii_case<'a>(
         .map(|(_, v)| v.as_str())
 }
 
+#[cfg(windows)]
 fn resolve_windows_stdio_command_for_env(
     command: &str,
     env: &HashMap<String, String>,
@@ -214,6 +217,7 @@ fn resolve_windows_stdio_command_for_env(
     })
 }
 
+#[cfg(windows)]
 fn windows_stdio_command_attempts_for_env(
     command: &str,
     env: &HashMap<String, String>,
@@ -242,6 +246,7 @@ fn windows_stdio_command_attempts_for_env(
         .collect()
 }
 
+#[cfg(windows)]
 fn should_resolve_windows_stdio_command(command: &str) -> bool {
     if command.trim().is_empty() || command.contains('/') || command.contains('\\') {
         return false;
@@ -250,6 +255,7 @@ fn should_resolve_windows_stdio_command(command: &str) -> bool {
     Path::new(command).extension().is_none()
 }
 
+#[cfg(windows)]
 fn effective_windows_path(env: &HashMap<String, String>) -> Option<String> {
     env_get_ignore_ascii_case(env, "PATH")
         .map(str::to_string)
@@ -263,6 +269,7 @@ fn effective_windows_path(env: &HashMap<String, String>) -> Option<String> {
         })
 }
 
+#[cfg(windows)]
 fn windows_path_extensions(env: &HashMap<String, String>, command: &str) -> Vec<String> {
     let mut extensions = Vec::new();
     let mut seen = HashSet::new();
@@ -280,6 +287,7 @@ fn windows_path_extensions(env: &HashMap<String, String>, command: &str) -> Vec<
     extensions
 }
 
+#[cfg(windows)]
 fn push_windows_extension(extensions: &mut Vec<String>, seen: &mut HashSet<String>, ext: &str) {
     let mut normalized = ext.trim().to_ascii_lowercase();
     if normalized.is_empty() {
@@ -869,6 +877,7 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn windows_stdio_command_resolves_npx_cmd_from_path() {
         let dir = tempfile::tempdir().unwrap();
@@ -884,6 +893,7 @@ mod tests {
         assert_eq!(resolved.program, npx.to_string_lossy());
     }
 
+    #[cfg(windows)]
     #[test]
     fn windows_stdio_command_keeps_existing_cmd_extension() {
         let resolved = resolve_windows_stdio_command_for_env("npx.cmd", &HashMap::new());
@@ -891,6 +901,7 @@ mod tests {
         assert!(resolved.is_none());
     }
 
+    #[cfg(windows)]
     #[test]
     fn windows_stdio_command_reports_attempted_candidates_when_missing() {
         let dir = tempfile::tempdir().unwrap();

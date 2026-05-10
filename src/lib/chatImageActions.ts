@@ -1,4 +1,5 @@
 import { invoke, isTauri } from './invoke';
+import { Image as TauriImage } from '@tauri-apps/api/image';
 
 const IMAGE_MIME_EXTENSIONS: Record<string, string> = {
   'image/png': 'png',
@@ -178,11 +179,8 @@ export async function copyChatImage(src: string) {
   const pngBytes = await blobToBytes(pngBlob);
 
   if (isTauri()) {
-    const [{ Image }, { writeImage }] = await Promise.all([
-      import('@tauri-apps/api/image'),
-      import('@tauri-apps/plugin-clipboard-manager'),
-    ]);
-    const image = await Image.fromBytes(pngBytes);
+    const { writeImage } = await import('@tauri-apps/plugin-clipboard-manager');
+    const image = await TauriImage.fromBytes(pngBytes);
     await writeImage(image);
     return;
   }

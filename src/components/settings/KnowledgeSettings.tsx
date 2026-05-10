@@ -27,6 +27,7 @@ import { IconEditor } from '@/components/shared/IconEditor';
 import { KnowledgeBaseIcon } from '@/components/shared/KnowledgeBaseIcon';
 import { invoke } from '@/lib/invoke';
 import type { KnowledgeBase, KnowledgeDocument, IndexingStatus } from '@/types';
+import { listen } from '@tauri-apps/api/event';
 import {
   DndContext,
   closestCenter,
@@ -318,7 +319,6 @@ function KnowledgeBaseDetail({
     let unlistenChunk: (() => void) | undefined;
     let unlistenRebuild: (() => void) | undefined;
     (async () => {
-      const { listen } = await import('@tauri-apps/api/event');
       unlisten = await listen<{ documentId: string; success: boolean }>('knowledge-document-indexed', (event) => {
         loadDocuments(base.id);
         setRebuildingDocIds(prev => {
