@@ -2346,7 +2346,7 @@ pub async fn send_message(
         tracing::info!(
             "[send_message] model={} effective_system_prompt='{}'",
             &conversation.model_id,
-            &sys[..sys.len().min(80)]
+            &sys[..sys.floor_char_boundary(sys.len().min(80))]
         );
         chat_messages.push(ChatMessage {
             role: if no_system_role {
