@@ -3,6 +3,7 @@ import type {
   DrawingModelId,
   DrawingOutputFormat,
   DrawingQuality,
+  DrawingReferenceImageMode,
   ProviderConfig,
 } from '@/types';
 
@@ -57,6 +58,8 @@ export const DRAWING_SIZE_OPTIONS = [
   '3840x2160',
 ];
 
+export const DRAWING_REFERENCE_IMAGE_MODES: DrawingReferenceImageMode[] = ['multipart', 'base64'];
+
 export function getDrawingSizeOptions(t: DrawingTranslate): Array<{ label: string; value: string }> {
   return DRAWING_SIZE_OPTIONS.map((size) => ({
     label: size === 'auto' ? t('drawing.option.auto', 'Auto') : size,
@@ -109,6 +112,15 @@ export function getDrawingBackgroundOptions(
     return options.filter((option) => option.value !== 'transparent');
   }
   return options;
+}
+
+export function getDrawingReferenceImageModeOptions(
+  t: DrawingTranslate,
+): Array<{ label: string; value: DrawingReferenceImageMode }> {
+  return [
+    { label: t('drawing.option.referenceImageMode.multipart', 'Multipart'), value: 'multipart' },
+    { label: t('drawing.option.referenceImageMode.base64', 'Base64'), value: 'base64' },
+  ];
 }
 
 export function describeDrawingSize(size: string) {

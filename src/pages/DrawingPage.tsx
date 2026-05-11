@@ -110,6 +110,7 @@ export function DrawingPage() {
             onEdit={(image) => selectImageForEdit(image)}
             onMaskEdit={handleMaskEdit}
             onUsePrompt={handleUsePrompt}
+            referenceImageMode={settings.referenceImageMode}
           />
         </div>
         <DrawingComposer

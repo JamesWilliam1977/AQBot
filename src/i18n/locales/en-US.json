@@ -1250,6 +1250,7 @@
     "batchCount": "Batch Count",
     "compression": "Compression",
     "references": "Reference Images",
+    "referenceImageMode": "Reference transport",
     "referenceUpload": "Upload references",
     "history": "History",
     "empty": "No drawing history",
@@ -1280,6 +1281,10 @@
     "brushSize": "Brush size",
     "generating": "Generating",
     "failed": "Failed",
+    "stopped": "Stopped by user",
+    "stopConfirmTitle": "Stop generation?",
+    "stopConfirmContent": "This record will be marked as stopped by user.",
+    "deleteConfirmTitle": "Delete this drawing record?",
     "deleteRecord": "Delete",
     "deleteRecordOnly": "Delete record only",
     "deleteRecordAndImages": "Delete all",
@@ -1317,6 +1322,10 @@
       "background": {
         "opaque": "Opaque",
         "transparent": "Transparent"
+      },
+      "referenceImageMode": {
+        "multipart": "Multipart",
+        "base64": "Base64"
       }
     }
   }

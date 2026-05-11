@@ -80,6 +80,60 @@ describe('DrawingGenerationItem', () => {
     expect(screen.queryByRole('button', { name: '删除' })).toBeNull();
   });
 
+  it('shows a confirmed stop action while running', async () => {
+    const onStop = vi.fn();
+    render(
+      <DrawingGenerationItem
+        generation={generationFixture({ parameters_json: JSON.stringify({ n: 2, size: '1024x1024' }) })}
+        onEdit={() => {}}
+        onMaskEdit={() => {}}
+        onRetry={() => {}}
+        onDelete={() => {}}
+        onStop={onStop}
+        onUsePrompt={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '停止' }));
+    fireEvent.click(await screen.findByRole('button', { name: '确 认' }));
+
+    expect(onStop).toHaveBeenCalledWith('generation-1');
+  });
+
+  it('shows stopped generations as a warning with retry and direct delete actions', async () => {
+    const onRetry = vi.fn();
+    const onDelete = vi.fn();
+    render(
+      <DrawingGenerationItem
+        generation={generationFixture({
+          status: 'stopped',
+          error_message: '主动停止',
+          completed_at: 2,
+          images: [],
+        })}
+        onEdit={() => {}}
+        onMaskEdit={() => {}}
+        onRetry={onRetry}
+        onDelete={onDelete}
+        onStop={() => {}}
+        onUsePrompt={() => {}}
+      />,
+    );
+
+    expect(screen.getAllByText('主动停止').length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByRole('button', { name: '下载' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '重新编辑' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '区域编辑' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: '再次生成' }));
+    expect(onRetry).toHaveBeenCalledWith(expect.objectContaining({ id: 'generation-1' }));
+
+    fireEvent.click(screen.getByRole('button', { name: '删除' }));
+    expect(screen.queryByText('仅删除记录')).toBeNull();
+    fireEvent.click(await screen.findByRole('button', { name: '确 认' }));
+    expect(onDelete).toHaveBeenCalledWith('generation-1', false);
+  });
+
   it('renders source, mask, and reference thumbnails before the prompt', async () => {
     render(
       <DrawingGenerationItem
@@ -219,6 +273,7 @@ describe('DrawingGenerationItem', () => {
   });
 
   it('shows failed generation errors with a copy action', () => {
+    const onDelete = vi.fn();
     render(
       <DrawingGenerationItem
         generation={generationFixture({
@@ -228,13 +283,15 @@ describe('DrawingGenerationItem', () => {
         onEdit={() => {}}
         onMaskEdit={() => {}}
         onRetry={() => {}}
-        onDelete={() => {}}
+        onDelete={onDelete}
         onUsePrompt={() => {}}
       />,
     );
 
     expect(screen.getByText('OpenAI image API error 400')).toBeDefined();
     expect(screen.getAllByText('copy-button').length).toBeGreaterThanOrEqual(1);
+    fireEvent.click(screen.getByRole('button', { name: '删除' }));
+    expect(screen.queryByText('仅删除记录')).toBeNull();
   });
 
   it('runs bottom image actions directly when there is only one image and exposes both delete modes', async () => {

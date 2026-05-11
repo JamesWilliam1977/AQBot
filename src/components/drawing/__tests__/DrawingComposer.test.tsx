@@ -40,6 +40,7 @@ const settingsFixture: DrawingSettings = {
   outputFormat: 'png',
   background: 'auto',
   outputCompression: undefined,
+  referenceImageMode: 'base64',
   n: 1,
 };
 
@@ -102,6 +103,7 @@ describe('DrawingComposer', () => {
         source_image_id: 'image-1',
         mask_file_id: 'mask-1',
         prompt: '替换涂抹区域',
+        reference_image_mode: 'base64',
       }));
     });
     expect(editImage).not.toHaveBeenCalled();

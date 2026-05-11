@@ -1,5 +1,5 @@
-import { Button, Dropdown, Image, Tooltip, Tag, Typography, message, theme } from 'antd';
-import { AtSign, Clipboard, Download, Focus, FolderOpen, Pencil, RefreshCw, Save, Trash2 } from 'lucide-react';
+import { Button, Dropdown, Image, Popconfirm, Tooltip, Tag, Typography, message, theme } from 'antd';
+import { AtSign, CircleStop, Clipboard, Download, Focus, FolderOpen, Pencil, RefreshCw, Save, Trash2 } from 'lucide-react';
 import type { CSSProperties, ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -15,6 +15,7 @@ interface Props {
   onEdit: (image: DrawingImage) => void;
   onMaskEdit: (image: DrawingImage) => void;
   onRetry: (generation: DrawingGeneration) => void;
+  onStop?: (id: string) => void;
   onDelete: (id: string, deleteResources: boolean) => void;
   onUsePrompt: (prompt: string) => void;
   onUseAsReference?: (image: DrawingImage) => void;
@@ -143,6 +144,7 @@ export function DrawingGenerationItem({
   onEdit,
   onMaskEdit,
   onRetry,
+  onStop,
   onDelete,
   onUsePrompt,
   onUseAsReference,
@@ -151,6 +153,9 @@ export function DrawingGenerationItem({
   const { token } = theme.useToken();
   const params = parseParams(generation);
   const firstImage = generation.images[0];
+  const hasGeneratedImages = generation.images.length > 0;
+  const isRunning = generation.status === 'running';
+  const isStopped = generation.status === 'stopped';
   const placeholderCount = Number(params.n || generation.images.length || 1);
   const hasMultipleImages = generation.images.length > 1;
   const imageMenuItems = useMemo(() => generation.images.map((image, index) => ({
@@ -233,6 +238,38 @@ export function DrawingGenerationItem({
       message.error(String(error));
     }
   };
+
+  const renderRetryAction = () => (
+    <Tooltip title={t('drawing.regenerate', '再次生成')}>
+      <Button
+        aria-label={t('drawing.regenerate', '再次生成')}
+        size="small"
+        color="default"
+        variant="filled"
+        icon={<RefreshCw size={15} />}
+        onClick={() => onRetry(generation)}
+      />
+    </Tooltip>
+  );
+
+  const renderDirectDeleteAction = () => (
+    <Popconfirm
+      title={t('drawing.deleteConfirmTitle', '删除这条绘画记录？')}
+      okText={t('common.confirm', '确认')}
+      cancelText={t('common.cancel', '取消')}
+      onConfirm={() => onDelete(generation.id, false)}
+    >
+      <Tooltip title={t('drawing.deleteRecord', '删除')}>
+        <Button
+          aria-label={t('drawing.deleteRecord', '删除')}
+          size="small"
+          color="danger"
+          variant="filled"
+          icon={<Trash2 size={15} />}
+        />
+      </Tooltip>
+    </Popconfirm>
+  );
 
   const getImageById = (id: string) => generation.images.find((image) => image.id === id);
 
@@ -332,6 +369,9 @@ export function DrawingGenerationItem({
               {generation.status === 'running' && (
                 <Tag color="processing" style={{ marginTop: 3 }}>{t('drawing.generating', '生成中')}</Tag>
               )}
+              {isStopped && (
+                <Tag color="warning" style={{ marginTop: 3 }}>{t('drawing.stopped', '主动停止')}</Tag>
+              )}
             </span>
           </div>
         </div>
@@ -359,11 +399,15 @@ export function DrawingGenerationItem({
         <div
           className="flex items-start gap-2 rounded-md px-3 py-2"
           style={{
-            background: token.colorErrorBg,
-            border: `1px solid ${token.colorErrorBorder}`,
+            background: isStopped ? token.colorWarningBg : token.colorErrorBg,
+            border: `1px solid ${isStopped ? token.colorWarningBorder : token.colorErrorBorder}`,
           }}
         >
-          <Typography.Text type="danger" className="min-w-0 flex-1" style={{ whiteSpace: 'pre-wrap' }}>
+          <Typography.Text
+            type={isStopped ? 'warning' : 'danger'}
+            className="min-w-0 flex-1"
+            style={{ whiteSpace: 'pre-wrap' }}
+          >
             {generation.error_message}
           </Typography.Text>
           <CopyButton
@@ -375,7 +419,7 @@ export function DrawingGenerationItem({
       ) : (
         <DrawingImageStrip
           images={generation.images}
-          loading={generation.status === 'running'}
+          loading={isRunning}
           placeholderCount={placeholderCount}
           onEdit={onEdit}
           onMaskEdit={onMaskEdit}
@@ -383,7 +427,36 @@ export function DrawingGenerationItem({
         />
       )}
 
-      {generation.status !== 'running' && (
+      {isRunning && onStop && (
+        <div className="mt-4 flex gap-2">
+          <Popconfirm
+            title={t('drawing.stopConfirmTitle', '停止生成？')}
+            description={t('drawing.stopConfirmContent', '停止后这条记录会标记为主动停止。')}
+            okText={t('common.confirm', '确认')}
+            cancelText={t('common.cancel', '取消')}
+            onConfirm={() => onStop(generation.id)}
+          >
+            <Tooltip title={t('common.stop', '停止')}>
+              <Button
+                aria-label={t('common.stop', '停止')}
+                size="small"
+                color="default"
+                variant="filled"
+                icon={<CircleStop size={15} />}
+              />
+            </Tooltip>
+          </Popconfirm>
+        </div>
+      )}
+
+      {!isRunning && !hasGeneratedImages && (
+        <div className="mt-4 flex gap-2">
+          {renderRetryAction()}
+          {renderDirectDeleteAction()}
+        </div>
+      )}
+
+      {!isRunning && hasGeneratedImages && (
         <div className="mt-4 flex gap-2">
           <Dropdown
             trigger={['click']}
@@ -443,16 +516,7 @@ export function DrawingGenerationItem({
             icon: <Focus size={15} />,
             onSelect: onMaskEdit,
           })}
-          <Tooltip title={t('drawing.regenerate', '再次生成')}>
-            <Button
-              aria-label={t('drawing.regenerate', '再次生成')}
-              size="small"
-              color="default"
-              variant="filled"
-              icon={<RefreshCw size={15} />}
-              onClick={() => onRetry(generation)}
-            />
-          </Tooltip>
+          {renderRetryAction()}
           <Dropdown
             trigger={['click']}
             menu={{

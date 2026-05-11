@@ -1250,6 +1250,7 @@
     "batchCount": "批量张数",
     "compression": "压缩",
     "references": "参考图",
+    "referenceImageMode": "参考图发送方式",
     "referenceUpload": "上传参考图",
     "history": "历史记录",
     "empty": "暂无绘画记录",
@@ -1280,6 +1281,10 @@
     "brushSize": "画笔大小",
     "generating": "生成中",
     "failed": "失败",
+    "stopped": "主动停止",
+    "stopConfirmTitle": "停止生成？",
+    "stopConfirmContent": "停止后这条记录会标记为主动停止。",
+    "deleteConfirmTitle": "删除这条绘画记录？",
     "deleteRecord": "删除",
     "deleteRecordOnly": "仅删除记录",
     "deleteRecordAndImages": "全部删除",
@@ -1317,6 +1322,10 @@
       "background": {
         "opaque": "不透明",
         "transparent": "透明"
+      },
+      "referenceImageMode": {
+        "multipart": "Multipart",
+        "base64": "Base64"
       }
     }
   }

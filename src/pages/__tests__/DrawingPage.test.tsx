@@ -191,6 +191,17 @@ describe('DrawingPage routing', () => {
     expect(screen.getByRole('spinbutton')).toHaveValue('4');
   });
 
+  it('renders reference image transport as its own option under batch count', () => {
+    render(<ContentArea activePage="drawing" />);
+
+    expect(screen.getByText('参考图发送方式')).toBeDefined();
+    expect(screen.getByText('Multipart')).toBeDefined();
+
+    const text = document.body.textContent ?? '';
+    expect(text.indexOf('批量张数')).toBeLessThan(text.indexOf('参考图发送方式'));
+    expect(text.indexOf('参考图发送方式')).toBeLessThan(text.indexOf('上传参考图'));
+  });
+
   it('does not clear a saved provider while providers are still loading', async () => {
     const fetchProviders = vi.fn(() => new Promise<void>(() => {}));
     useProviderStore.setState({ providers: [], fetchProviders });

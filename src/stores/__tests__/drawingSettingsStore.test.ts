@@ -15,6 +15,7 @@ describe('drawingSettingsStore', () => {
       quality: 'high',
       outputFormat: 'webp',
       outputCompression: 88,
+      referenceImageMode: 'base64',
       n: 4,
     });
 
@@ -28,6 +29,7 @@ describe('drawingSettingsStore', () => {
       quality: 'high',
       outputFormat: 'webp',
       outputCompression: undefined,
+      referenceImageMode: 'base64',
       n: 4,
     });
   });
@@ -42,6 +44,7 @@ describe('drawingSettingsStore', () => {
           outputFormat: 'jpeg',
           background: 'transparent',
           outputCompression: 150,
+          referenceImageMode: 'invalid-mode',
           n: 30,
         },
       },
@@ -57,6 +60,7 @@ describe('drawingSettingsStore', () => {
       outputFormat: 'jpeg',
       background: 'auto',
       outputCompression: undefined,
+      referenceImageMode: 'multipart',
       n: 10,
     });
   });

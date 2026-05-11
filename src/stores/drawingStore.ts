@@ -7,8 +7,11 @@ import type {
   DrawingGeneration,
   DrawingImage,
   DrawingMaskEditInput,
+  DrawingReferenceImageMode,
   DrawingStoredFile,
 } from '@/types';
+
+const DRAWING_STOPPED_MESSAGE = '主动停止';
 
 interface DrawingState {
   generations: DrawingGeneration[];
@@ -25,7 +28,11 @@ interface DrawingState {
   generateImages: (input: DrawingGenerateInput) => Promise<DrawingGeneration>;
   editImage: (input: DrawingEditInput) => Promise<DrawingGeneration>;
   editImageWithMask: (input: DrawingMaskEditInput) => Promise<DrawingGeneration>;
-  retryGeneration: (generation: DrawingGeneration) => Promise<DrawingGeneration>;
+  retryGeneration: (
+    generation: DrawingGeneration,
+    referenceImageMode?: DrawingReferenceImageMode,
+  ) => Promise<DrawingGeneration>;
+  stopGeneration: (id: string) => void;
   deleteGeneration: (id: string, deleteResources?: boolean) => Promise<void>;
   selectImageForEdit: (image: DrawingImage | null, maskFile?: DrawingStoredFile | null, previewUrl?: string | null) => void;
   useImageAsReference: (image: DrawingImage) => DrawingStoredFile;
@@ -85,6 +92,30 @@ function markOptimisticGenerationFailed(
         }
       : item
   ));
+}
+
+function markGenerationStopped(
+  generations: DrawingGeneration[],
+  id: string,
+): DrawingGeneration[] {
+  return generations.map((item) => (
+    item.id === id && item.status === 'running'
+      ? {
+          ...item,
+          status: 'stopped',
+          error_message: DRAWING_STOPPED_MESSAGE,
+          completed_at: Date.now(),
+          images: [],
+        }
+      : item
+  ));
+}
+
+function findStoppedGeneration(
+  generations: DrawingGeneration[],
+  id: string,
+): DrawingGeneration | undefined {
+  return generations.find((item) => item.id === id && item.status === 'stopped');
 }
 
 function createOptimisticGeneration(
@@ -202,6 +233,8 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
     }));
     try {
       const generation = await invoke<DrawingGeneration>('generate_drawing_images', { input });
+      const stopped = findStoppedGeneration(get().generations, optimistic.id);
+      if (stopped) return stopped;
       set((s) => ({
         generations: replaceOptimisticGeneration(s.generations, optimistic.id, generation),
         submitting: false,
@@ -212,6 +245,8 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
       }));
       return generation;
     } catch (e) {
+      const stopped = findStoppedGeneration(get().generations, optimistic.id);
+      if (stopped) return stopped;
       set((s) => ({
         generations: markOptimisticGenerationFailed(s.generations, optimistic.id, String(e)),
         submitting: false,
@@ -234,6 +269,8 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
     }));
     try {
       const generation = await invoke<DrawingGeneration>('edit_drawing_image', { input });
+      const stopped = findStoppedGeneration(get().generations, optimistic.id);
+      if (stopped) return stopped;
       set((s) => ({
         generations: replaceOptimisticGeneration(s.generations, optimistic.id, generation),
         submitting: false,
@@ -244,6 +281,8 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
       }));
       return generation;
     } catch (e) {
+      const stopped = findStoppedGeneration(get().generations, optimistic.id);
+      if (stopped) return stopped;
       set((s) => ({
         generations: markOptimisticGenerationFailed(s.generations, optimistic.id, String(e)),
         submitting: false,
@@ -267,6 +306,8 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
     }));
     try {
       const generation = await invoke<DrawingGeneration>('edit_drawing_image_with_mask', { input });
+      const stopped = findStoppedGeneration(get().generations, optimistic.id);
+      if (stopped) return stopped;
       set((s) => ({
         generations: replaceOptimisticGeneration(s.generations, optimistic.id, generation),
         submitting: false,
@@ -277,6 +318,8 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
       }));
       return generation;
     } catch (e) {
+      const stopped = findStoppedGeneration(get().generations, optimistic.id);
+      if (stopped) return stopped;
       set((s) => ({
         generations: markOptimisticGenerationFailed(s.generations, optimistic.id, String(e)),
         submitting: false,
@@ -286,8 +329,11 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
     }
   },
 
-  retryGeneration: async (generation) => {
-    const params = JSON.parse(generation.parameters_json || '{}');
+  retryGeneration: async (generation, referenceImageMode) => {
+    const params = {
+      ...JSON.parse(generation.parameters_json || '{}'),
+      ...(referenceImageMode ? { reference_image_mode: referenceImageMode } : {}),
+    };
     if (generation.action === 'edit' && params.source_image_id) {
       return get().editImage(params);
     }
@@ -296,6 +342,13 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
     }
     return get().generateImages(params);
   },
+
+  stopGeneration: (id) => set((s) => ({
+    generations: markGenerationStopped(s.generations, id),
+    submitting: s.generations.some((item) => item.id === id && item.status === 'running')
+      ? false
+      : s.submitting,
+  })),
 
   deleteGeneration: async (id, deleteResources = false) => {
     if (id.startsWith('optimistic-')) {

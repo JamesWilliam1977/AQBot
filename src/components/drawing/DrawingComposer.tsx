@@ -154,6 +154,7 @@ export function DrawingComposer({ settings, prompt, onPromptChange, onHeightChan
         output_format: settings.outputFormat,
         background: settings.background,
         output_compression: settings.outputCompression,
+        reference_image_mode: settings.referenceImageMode,
         n: settings.n,
         reference_file_ids: references.map((item) => item.id),
       };

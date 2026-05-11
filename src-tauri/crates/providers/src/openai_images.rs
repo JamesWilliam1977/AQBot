@@ -32,8 +32,15 @@ pub struct ImageEditRequest {
     pub output_format: String,
     pub background: Option<String>,
     pub output_compression: Option<u8>,
+    pub transfer_mode: ImageEditTransferMode,
     pub images: Vec<ImageUpload>,
     pub mask: Option<ImageUpload>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageEditTransferMode {
+    Multipart,
+    Base64,
 }
 
 #[derive(Debug, Clone)]
@@ -41,6 +48,31 @@ pub struct ImageUpload {
     pub bytes: Vec<u8>,
     pub file_name: String,
     pub mime_type: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ImageEditJsonRequest {
+    model: String,
+    prompt: String,
+    n: u8,
+    size: String,
+    quality: String,
+    output_format: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    background: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_compression: Option<u8>,
+    images: Vec<ImageInputReference>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mask: Option<ImageInputReference>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ImageInputReference {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    image_url: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -129,44 +161,80 @@ impl OpenAIImagesClient {
         request: ImageEditRequest,
     ) -> Result<ImageApiOutput> {
         let client = self.get_client(ctx)?;
-        let mut form = reqwest::multipart::Form::new()
-            .text("model", request.model)
-            .text("prompt", request.prompt)
-            .text("n", request.n.to_string())
-            .text("size", request.size)
-            .text("quality", request.quality)
-            .text("output_format", request.output_format);
-
-        if let Some(background) = request.background {
-            form = form.text("background", background);
-        }
-        if let Some(compression) = request.output_compression {
-            form = form.text("output_compression", compression.to_string());
-        }
-        for image in request.images {
-            let part = reqwest::multipart::Part::bytes(image.bytes)
-                .file_name(image.file_name)
-                .mime_str(&image.mime_type)
-                .map_err(|e| AQBotError::Provider(format!("Invalid image MIME type: {}", e)))?;
-            form = form.part("image[]", part);
-        }
-        if let Some(mask) = request.mask {
-            let part = reqwest::multipart::Part::bytes(mask.bytes)
-                .file_name(mask.file_name)
-                .mime_str(&mask.mime_type)
-                .map_err(|e| AQBotError::Provider(format!("Invalid mask MIME type: {}", e)))?;
-            form = form.part("mask", part);
-        }
-
         let builder = client
             .post(Self::edit_url(ctx))
-            .bearer_auth(&ctx.api_key)
-            .multipart(form);
+            .bearer_auth(&ctx.api_key);
+        let builder = match request.transfer_mode {
+            ImageEditTransferMode::Multipart => {
+                builder.multipart(build_edit_multipart_form(request)?)
+            }
+            ImageEditTransferMode::Base64 => builder.json(&build_edit_json_request(request)),
+        };
         let response = apply_request_headers(builder, ctx)
             .send()
             .await
             .map_err(|e| AQBotError::Provider(format!("Image edit failed: {}", e)))?;
         parse_response(response).await
+    }
+}
+
+fn image_upload_to_part(upload: ImageUpload) -> Result<reqwest::multipart::Part> {
+    reqwest::multipart::Part::bytes(upload.bytes)
+        .file_name(upload.file_name)
+        .mime_str(&upload.mime_type)
+        .map_err(|e| AQBotError::Provider(format!("Invalid image MIME type: {}", e)))
+}
+
+fn build_edit_multipart_form(request: ImageEditRequest) -> Result<reqwest::multipart::Form> {
+    let mut form = reqwest::multipart::Form::new()
+        .text("model", request.model)
+        .text("prompt", request.prompt)
+        .text("n", request.n.to_string())
+        .text("size", request.size)
+        .text("quality", request.quality)
+        .text("output_format", request.output_format);
+
+    if let Some(background) = request.background {
+        form = form.text("background", background);
+    }
+    if let Some(output_compression) = request.output_compression {
+        form = form.text("output_compression", output_compression.to_string());
+    }
+
+    for upload in request.images {
+        form = form.part("image[]", image_upload_to_part(upload)?);
+    }
+    if let Some(mask) = request.mask {
+        form = form.part("mask", image_upload_to_part(mask)?);
+    }
+
+    Ok(form)
+}
+
+fn image_upload_to_reference(upload: ImageUpload) -> ImageInputReference {
+    let data = base64::engine::general_purpose::STANDARD.encode(upload.bytes);
+    ImageInputReference {
+        file_id: None,
+        image_url: Some(format!("data:{};base64,{}", upload.mime_type, data)),
+    }
+}
+
+fn build_edit_json_request(request: ImageEditRequest) -> ImageEditJsonRequest {
+    ImageEditJsonRequest {
+        model: request.model,
+        prompt: request.prompt,
+        n: request.n,
+        size: request.size,
+        quality: request.quality,
+        output_format: request.output_format,
+        background: request.background,
+        output_compression: request.output_compression,
+        images: request
+            .images
+            .into_iter()
+            .map(image_upload_to_reference)
+            .collect(),
+        mask: request.mask.map(image_upload_to_reference),
     }
 }
 
@@ -233,5 +301,185 @@ mod tests {
             OpenAIImagesClient::edit_url(&ctx),
             "https://api.openai.com/v1/images/edits"
         );
+    }
+
+    #[test]
+    fn edit_request_body_serializes_images_as_base64_data_urls() {
+        let body = build_edit_json_request(ImageEditRequest {
+            model: "gpt-image-2".to_string(),
+            prompt: "换成马斯克".to_string(),
+            n: 1,
+            size: "1024x1024".to_string(),
+            quality: "high".to_string(),
+            output_format: "png".to_string(),
+            background: Some("auto".to_string()),
+            output_compression: None,
+            transfer_mode: ImageEditTransferMode::Base64,
+            images: vec![ImageUpload {
+                bytes: b"abc".to_vec(),
+                file_name: "reference.jpg".to_string(),
+                mime_type: "image/jpeg".to_string(),
+            }],
+            mask: None,
+        });
+
+        let value = serde_json::to_value(body).expect("edit JSON body");
+        assert_eq!(value["model"], "gpt-image-2");
+        assert_eq!(value["prompt"], "换成马斯克");
+        assert_eq!(value["images"][0]["image_url"], "data:image/jpeg;base64,YWJj");
+        assert!(value.get("mask").is_none());
+
+        let serialized = value.to_string();
+        assert!(!serialized.contains("image[]"));
+        assert!(!serialized.contains("reference.jpg"));
+        assert!(!serialized.contains("bytes"));
+    }
+
+    #[test]
+    fn edit_request_body_serializes_multiple_images_and_mask_as_data_urls() {
+        let body = build_edit_json_request(ImageEditRequest {
+            model: "gpt-image-2".to_string(),
+            prompt: "只替换遮罩区域".to_string(),
+            n: 1,
+            size: "auto".to_string(),
+            quality: "auto".to_string(),
+            output_format: "webp".to_string(),
+            background: None,
+            output_compression: Some(80),
+            transfer_mode: ImageEditTransferMode::Base64,
+            images: vec![
+                ImageUpload {
+                    bytes: b"source".to_vec(),
+                    file_name: "source.png".to_string(),
+                    mime_type: "image/png".to_string(),
+                },
+                ImageUpload {
+                    bytes: b"ref".to_vec(),
+                    file_name: "ref.webp".to_string(),
+                    mime_type: "image/webp".to_string(),
+                },
+            ],
+            mask: Some(ImageUpload {
+                bytes: b"mask".to_vec(),
+                file_name: "mask.png".to_string(),
+                mime_type: "image/png".to_string(),
+            }),
+        });
+
+        let value = serde_json::to_value(body).expect("edit JSON body");
+        assert_eq!(value["images"].as_array().expect("images array").len(), 2);
+        assert_eq!(value["images"][0]["image_url"], "data:image/png;base64,c291cmNl");
+        assert_eq!(value["images"][1]["image_url"], "data:image/webp;base64,cmVm");
+        assert_eq!(value["mask"]["image_url"], "data:image/png;base64,bWFzaw==");
+        assert_eq!(value["output_compression"], 80);
+        assert!(value.get("background").is_none());
+
+        let serialized = value.to_string();
+        assert!(!serialized.contains("image[]"));
+        assert!(!serialized.contains("file_name"));
+        assert!(!serialized.contains("mime_type"));
+    }
+
+    #[tokio::test]
+    async fn edit_sends_multipart_body_when_requested() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let addr = listener.local_addr().expect("server addr");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept request");
+            let mut request = Vec::new();
+            let mut buffer = [0u8; 4096];
+            let mut header_end = None;
+            let mut content_length = 0usize;
+
+            loop {
+                let read = socket.read(&mut buffer).await.expect("read request");
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+
+                if header_end.is_none() {
+                    header_end = request.windows(4).position(|window| window == b"\r\n\r\n");
+                    if let Some(end) = header_end {
+                        let headers = String::from_utf8_lossy(&request[..end]);
+                        content_length = headers
+                            .lines()
+                            .find_map(|line| {
+                                line.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .and_then(|value| value.trim().parse::<usize>().ok())
+                            })
+                            .unwrap_or(0);
+                    }
+                }
+
+                if let Some(end) = header_end {
+                    if request.len() >= end + 4 + content_length {
+                        break;
+                    }
+                }
+            }
+
+            let body = r#"{"data":[{"b64_json":"aW1n"}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write response");
+
+            String::from_utf8_lossy(&request).into_owned()
+        });
+
+        let ctx = ProviderRequestContext {
+            api_key: "sk-test".to_string(),
+            key_id: "key".to_string(),
+            provider_id: "provider".to_string(),
+            base_url: Some(format!("http://{}", addr)),
+            api_path: None,
+            proxy_config: None,
+            custom_headers: None,
+        };
+
+        let output = OpenAIImagesClient::new()
+            .edit(
+                &ctx,
+                ImageEditRequest {
+                    model: "gpt-image-2".to_string(),
+                    prompt: "参考图生成".to_string(),
+                    n: 1,
+                    size: "auto".to_string(),
+                    quality: "auto".to_string(),
+                    output_format: "png".to_string(),
+                    background: None,
+                    output_compression: None,
+                    transfer_mode: ImageEditTransferMode::Multipart,
+                    images: vec![ImageUpload {
+                        bytes: b"abc".to_vec(),
+                        file_name: "reference.jpg".to_string(),
+                        mime_type: "image/jpeg".to_string(),
+                    }],
+                    mask: None,
+                },
+            )
+            .await
+            .expect("edit response");
+
+        let request = server.await.expect("server captured request");
+        assert_eq!(output.images[0].bytes, b"img");
+        assert!(request.starts_with("POST /images/edits HTTP/1.1"));
+        assert!(request
+            .to_ascii_lowercase()
+            .contains("content-type: multipart/form-data; boundary="));
+        assert!(request.contains("name=\"image[]\""));
+        assert!(request.contains("filename=\"reference.jpg\""));
+        assert!(!request.contains("data:image/jpeg;base64"));
     }
 }

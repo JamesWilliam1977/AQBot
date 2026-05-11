@@ -1,21 +1,23 @@
 import { Empty, Spin, theme } from 'antd';
 import { useTranslation } from 'react-i18next';
 import { useDrawingStore } from '@/stores/drawingStore';
-import type { DrawingGeneration, DrawingImage } from '@/types';
+import type { DrawingGeneration, DrawingImage, DrawingReferenceImageMode } from '@/types';
 import { DrawingGenerationItem } from './DrawingGenerationItem';
 
 interface Props {
   onEdit: (image: DrawingImage) => void;
   onMaskEdit: (image: DrawingImage) => void;
   onUsePrompt: (prompt: string) => void;
+  referenceImageMode: DrawingReferenceImageMode;
 }
 
-export function DrawingGenerationList({ onEdit, onMaskEdit, onUsePrompt }: Props) {
+export function DrawingGenerationList({ onEdit, onMaskEdit, onUsePrompt, referenceImageMode }: Props) {
   const { t } = useTranslation();
   const { token } = theme.useToken();
   const generations = useDrawingStore((s) => s.generations);
   const loading = useDrawingStore((s) => s.loading);
   const retryGeneration = useDrawingStore((s) => s.retryGeneration);
+  const stopGeneration = useDrawingStore((s) => s.stopGeneration);
   const deleteGeneration = useDrawingStore((s) => s.deleteGeneration);
   const useImageAsReference = useDrawingStore((s) => s.useImageAsReference);
 
@@ -47,7 +49,8 @@ export function DrawingGenerationList({ onEdit, onMaskEdit, onUsePrompt }: Props
           generation={generation}
           onEdit={onEdit}
           onMaskEdit={onMaskEdit}
-          onRetry={(item) => retryGeneration(item).catch(() => {})}
+          onRetry={(item) => retryGeneration(item, referenceImageMode).catch(() => {})}
+          onStop={stopGeneration}
           onDelete={(id, deleteResources) => deleteGeneration(id, deleteResources).catch(() => {})}
           onUsePrompt={onUsePrompt}
           onUseAsReference={useImageAsReference}

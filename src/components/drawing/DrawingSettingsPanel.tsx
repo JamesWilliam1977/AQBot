@@ -1,12 +1,13 @@
 import { Form, InputNumber, Select, Slider, Switch, Typography, theme } from 'antd';
 import { useTranslation } from 'react-i18next';
-import type { DrawingSettings, ProviderConfig } from '@/types';
+import type { DrawingReferenceImageMode, DrawingSettings, ProviderConfig } from '@/types';
 import {
   getDrawingBackgroundOptions,
   getDrawingModelOptions,
   getDrawingOutputFormatOptions,
   getDrawingProvidersForModel,
   getDrawingQualityOptions,
+  getDrawingReferenceImageModeOptions,
   getDrawingSizeOptions,
   isDrawingOutputCompressionSupported,
   isDrawingTransparentBackgroundSupported,
@@ -39,6 +40,7 @@ export function DrawingSettingsPanel({ settings, providers, onChange }: Props) {
   }));
   const compressionVisible = isDrawingOutputCompressionSupported(settings.modelId, settings.outputFormat);
   const backgroundOptions = getDrawingBackgroundOptions(translateOption, settings.modelId);
+  const referenceImageModeOptions = getDrawingReferenceImageModeOptions(translateOption);
 
   const normalizeSettings = (next: DrawingSettings): DrawingSettings => ({
     ...next,
@@ -124,6 +126,13 @@ export function DrawingSettingsPanel({ settings, providers, onChange }: Props) {
             value={settings.n}
             style={{ width: '100%' }}
             onChange={(n) => patch({ n: n || 1 })}
+          />
+        </Form.Item>
+        <Form.Item label={t('drawing.referenceImageMode', '参考图发送方式')}>
+          <Select<DrawingReferenceImageMode>
+            value={settings.referenceImageMode}
+            options={referenceImageModeOptions}
+            onChange={(referenceImageMode) => patch({ referenceImageMode })}
           />
         </Form.Item>
         {compressionVisible && (

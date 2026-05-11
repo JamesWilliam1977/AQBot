@@ -61,6 +61,7 @@ describe('drawingStore', () => {
       output_format: 'png',
       background: 'auto',
       n: 10,
+      reference_image_mode: 'multipart',
       reference_file_ids: [],
     });
 
@@ -137,6 +138,7 @@ describe('drawingStore', () => {
       output_format: 'png',
       background: 'auto',
       n: 4,
+      reference_image_mode: 'multipart',
       reference_file_ids: [],
     });
 
@@ -160,6 +162,54 @@ describe('drawingStore', () => {
 
     expect(useDrawingStore.getState().generations).toHaveLength(1);
     expect(useDrawingStore.getState().generations[0].id).toBe('generation-1');
+  });
+
+  it('marks a running optimistic generation as stopped and ignores a late backend result', async () => {
+    let resolveGeneration: (value: any) => void = () => {};
+    invokeMock.mockReturnValueOnce(new Promise((resolve) => {
+      resolveGeneration = resolve;
+    }));
+    const { useDrawingStore } = await import('../drawingStore');
+
+    const promise = useDrawingStore.getState().generateImages({
+      provider_id: 'provider-1',
+      model_id: 'gpt-image-2',
+      prompt: '可以被停止的任务',
+      size: '1024x1024',
+      quality: 'auto',
+      output_format: 'png',
+      background: 'auto',
+      n: 1,
+      reference_image_mode: 'multipart',
+      reference_file_ids: [],
+    });
+
+    const optimistic = useDrawingStore.getState().generations[0];
+    useDrawingStore.getState().stopGeneration(optimistic.id);
+
+    expect(useDrawingStore.getState().submitting).toBe(false);
+    expect(useDrawingStore.getState().generations[0]).toMatchObject({
+      id: optimistic.id,
+      status: 'stopped',
+      error_message: '主动停止',
+      images: [],
+    });
+
+    resolveGeneration({
+      ...optimistic,
+      id: 'generation-from-backend',
+      status: 'succeeded',
+      completed_at: 2,
+      images: [{ id: 'image-1' }],
+    });
+    await promise;
+
+    expect(useDrawingStore.getState().generations).toHaveLength(1);
+    expect(useDrawingStore.getState().generations[0]).toMatchObject({
+      id: optimistic.id,
+      status: 'stopped',
+      images: [],
+    });
   });
 
   it('keeps reference, source, and mask preview metadata on optimistic records', async () => {
@@ -208,6 +258,7 @@ describe('drawingStore', () => {
       n: 1,
       source_image_id: 'source-image-1',
       mask_file_id: 'mask-1',
+      reference_image_mode: 'multipart',
       reference_file_ids: ['ref-1'],
     });
 
@@ -249,6 +300,7 @@ describe('drawingStore', () => {
       output_format: 'png',
       background: 'auto',
       n: 1,
+      reference_image_mode: 'multipart',
       reference_file_ids: [],
     });
 
@@ -283,6 +335,7 @@ describe('drawingStore', () => {
       n: 1,
       source_image_id: 'image-1',
       mask_file_id: 'mask-1',
+      reference_image_mode: 'multipart',
       reference_file_ids: [],
     });
 
@@ -290,6 +343,51 @@ describe('drawingStore', () => {
       input: expect.objectContaining({
         source_image_id: 'image-1',
         mask_file_id: 'mask-1',
+      }),
+    });
+  });
+
+  it('uses the current reference image mode when retrying a generation', async () => {
+    invokeMock.mockResolvedValueOnce({ id: 'generation-2', images: [] });
+    const { useDrawingStore } = await import('../drawingStore');
+
+    await useDrawingStore.getState().retryGeneration({
+      id: 'generation-1',
+      parent_generation_id: null,
+      provider_id: 'provider-1',
+      key_id: 'key-1',
+      model_id: 'gpt-image-2',
+      api_kind: 'image_api',
+      action: 'reference_generate',
+      prompt: '重试参考图生成',
+      parameters_json: JSON.stringify({
+        provider_id: 'provider-1',
+        model_id: 'gpt-image-2',
+        prompt: '重试参考图生成',
+        size: '1024x1024',
+        quality: 'auto',
+        output_format: 'png',
+        background: 'auto',
+        n: 1,
+        reference_image_mode: 'multipart',
+        reference_file_ids: ['ref-1'],
+      }),
+      reference_file_ids_json: '["ref-1"]',
+      source_image_ids_json: '[]',
+      mask_file_id: null,
+      status: 'failed',
+      error_message: 'failed',
+      response_id: null,
+      usage_json: null,
+      created_at: 1,
+      completed_at: 2,
+      images: [],
+    }, 'base64');
+
+    expect(invokeMock).toHaveBeenCalledWith('generate_drawing_images', {
+      input: expect.objectContaining({
+        reference_image_mode: 'base64',
+        reference_file_ids: ['ref-1'],
       }),
     });
   });

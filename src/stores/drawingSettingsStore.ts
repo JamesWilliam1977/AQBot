@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import {
   DRAWING_MODELS,
+  DRAWING_REFERENCE_IMAGE_MODES,
   DRAWING_SIZE_OPTIONS,
   isDrawingOutputCompressionSupported,
   isDrawingTransparentBackgroundSupported,
@@ -11,6 +12,7 @@ import type {
   DrawingModelId,
   DrawingOutputFormat,
   DrawingQuality,
+  DrawingReferenceImageMode,
   DrawingSettings,
 } from '@/types';
 
@@ -24,6 +26,7 @@ const DRAWING_MODEL_IDS = new Set<DrawingModelId>(DRAWING_MODELS.map((model) => 
 const DRAWING_QUALITIES = new Set<DrawingQuality>(['auto', 'low', 'medium', 'high']);
 const DRAWING_OUTPUT_FORMATS = new Set<DrawingOutputFormat>(['png', 'jpeg', 'webp']);
 const DRAWING_BACKGROUNDS = new Set<DrawingBackground>(['auto', 'opaque', 'transparent']);
+const DRAWING_REFERENCE_MODES = new Set<DrawingReferenceImageMode>(DRAWING_REFERENCE_IMAGE_MODES);
 
 export const DEFAULT_DRAWING_SETTINGS: DrawingSettings = {
   providerId: '',
@@ -33,6 +36,7 @@ export const DEFAULT_DRAWING_SETTINGS: DrawingSettings = {
   outputFormat: 'png',
   background: 'auto',
   outputCompression: undefined,
+  referenceImageMode: 'multipart',
   n: 1,
 };
 
@@ -57,6 +61,10 @@ function isDrawingOutputFormat(value: unknown): value is DrawingOutputFormat {
 
 function isDrawingBackground(value: unknown): value is DrawingBackground {
   return typeof value === 'string' && DRAWING_BACKGROUNDS.has(value as DrawingBackground);
+}
+
+function isDrawingReferenceImageMode(value: unknown): value is DrawingReferenceImageMode {
+  return typeof value === 'string' && DRAWING_REFERENCE_MODES.has(value as DrawingReferenceImageMode);
 }
 
 function clampNumber(value: number, min: number, max: number): number {
@@ -96,6 +104,9 @@ export function normalizeDrawingSettings(settings: Partial<DrawingSettings> = {}
     outputCompression: isDrawingOutputCompressionSupported(modelId, outputFormat)
       ? outputCompression
       : undefined,
+    referenceImageMode: isDrawingReferenceImageMode(settings.referenceImageMode)
+      ? settings.referenceImageMode
+      : DEFAULT_DRAWING_SETTINGS.referenceImageMode,
     n: typeof settings.n === 'number'
       ? clampNumber(Math.round(settings.n), MIN_BATCH_COUNT, MAX_BATCH_COUNT)
       : DEFAULT_DRAWING_SETTINGS.n,

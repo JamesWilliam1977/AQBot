@@ -6,7 +6,7 @@ use aqbot_core::repo::drawing::{
 use aqbot_core::repo::stored_file::StoredFile;
 use aqbot_core::types::{ProviderConfig, ProviderProxyConfig, ProviderType};
 use aqbot_providers::openai_images::{
-    ImageEditRequest, ImageGenerateRequest, ImageUpload, OpenAIImagesClient,
+    ImageEditRequest, ImageEditTransferMode, ImageGenerateRequest, ImageUpload, OpenAIImagesClient,
 };
 use aqbot_providers::{resolve_base_url_for_type, ProviderRequestContext};
 use base64::Engine;
@@ -36,6 +36,8 @@ pub struct DrawingGenerateInput {
     pub output_compression: Option<u8>,
     pub n: u8,
     #[serde(default)]
+    pub reference_image_mode: DrawingReferenceImageMode,
+    #[serde(default)]
     pub reference_file_ids: Vec<String>,
 }
 
@@ -51,6 +53,8 @@ pub struct DrawingEditInput {
     pub output_compression: Option<u8>,
     pub n: u8,
     pub source_image_id: String,
+    #[serde(default)]
+    pub reference_image_mode: DrawingReferenceImageMode,
     #[serde(default)]
     pub reference_file_ids: Vec<String>,
 }
@@ -69,7 +73,31 @@ pub struct DrawingMaskEditInput {
     pub source_image_id: String,
     pub mask_file_id: String,
     #[serde(default)]
+    pub reference_image_mode: DrawingReferenceImageMode,
+    #[serde(default)]
     pub reference_file_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DrawingReferenceImageMode {
+    Multipart,
+    Base64,
+}
+
+impl Default for DrawingReferenceImageMode {
+    fn default() -> Self {
+        Self::Multipart
+    }
+}
+
+impl From<DrawingReferenceImageMode> for ImageEditTransferMode {
+    fn from(value: DrawingReferenceImageMode) -> Self {
+        match value {
+            DrawingReferenceImageMode::Multipart => ImageEditTransferMode::Multipart,
+            DrawingReferenceImageMode::Base64 => ImageEditTransferMode::Base64,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -191,6 +219,7 @@ pub async fn generate_drawing_images(
                     output_format: input.output_format.clone(),
                     background: input.background.clone(),
                     output_compression: input.output_compression,
+                    transfer_mode: input.reference_image_mode.into(),
                     images: uploads,
                     mask: None,
                 },
@@ -248,6 +277,7 @@ pub async fn edit_drawing_image(
                 output_format: input.output_format.clone(),
                 background: input.background.clone(),
                 output_compression: input.output_compression,
+                transfer_mode: input.reference_image_mode.into(),
                 images: uploads,
                 mask: None,
             },
@@ -315,6 +345,7 @@ pub async fn edit_drawing_image_with_mask(
                 output_format: input.output_format.clone(),
                 background: input.background.clone(),
                 output_compression: input.output_compression,
+                transfer_mode: input.reference_image_mode.into(),
                 images: uploads,
                 mask,
             },
@@ -800,5 +831,50 @@ mod tests {
             "1024x1024",
         )
         .is_err());
+    }
+
+    #[test]
+    fn reference_image_mode_defaults_to_multipart_for_older_payloads() {
+        let input: DrawingGenerateInput = serde_json::from_value(serde_json::json!({
+            "provider_id": "provider-1",
+            "model_id": "gpt-image-2",
+            "prompt": "prompt",
+            "size": "auto",
+            "quality": "auto",
+            "output_format": "png",
+            "background": "auto",
+            "output_compression": null,
+            "n": 1,
+            "reference_file_ids": ["ref-1"]
+        }))
+        .expect("deserialize drawing input");
+
+        assert_eq!(
+            input.reference_image_mode,
+            DrawingReferenceImageMode::Multipart
+        );
+    }
+
+    #[test]
+    fn reference_image_mode_accepts_base64_payload_value() {
+        let input: DrawingGenerateInput = serde_json::from_value(serde_json::json!({
+            "provider_id": "provider-1",
+            "model_id": "gpt-image-2",
+            "prompt": "prompt",
+            "size": "auto",
+            "quality": "auto",
+            "output_format": "png",
+            "background": "auto",
+            "output_compression": null,
+            "n": 1,
+            "reference_image_mode": "base64",
+            "reference_file_ids": ["ref-1"]
+        }))
+        .expect("deserialize drawing input");
+
+        assert_eq!(
+            input.reference_image_mode,
+            DrawingReferenceImageMode::Base64
+        );
     }
 }

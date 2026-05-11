@@ -6,6 +6,7 @@ import {
   getDrawingOutputFormatOptions,
   getDrawingProvidersForModel,
   getDrawingQualityOptions,
+  getDrawingReferenceImageModeOptions,
   getDrawingSizeOptions,
   isDrawingOutputCompressionSupported,
 } from '../drawingModels';
@@ -121,6 +122,10 @@ describe('drawing model/provider filtering', () => {
     expect(getDrawingQualityOptions(t).map((item) => item.label)).toEqual(['自动', '低', '中', '高']);
     expect(getDrawingOutputFormatOptions(t).map((item) => item.label)).toEqual(['PNG', 'JPEG', 'WEBP']);
     expect(getDrawingBackgroundOptions(t).map((item) => item.label)).toEqual(['自动', '不透明', '透明']);
+    expect(getDrawingReferenceImageModeOptions(t)).toEqual([
+      { label: 'Multipart', value: 'multipart' },
+      { label: 'Base64', value: 'base64' },
+    ]);
   });
 
   it('hides unsupported gpt-image-2 parameters instead of disabling them', () => {

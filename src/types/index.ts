@@ -522,10 +522,11 @@ export type PageKey = 'chat' | 'drawing' | 'knowledge' | 'memory' | 'gateway' | 
 // === Drawing ===
 export type DrawingModelId = 'gpt-image-2' | 'gpt-image-1.5' | 'gpt-image-1' | 'gpt-image-1-mini';
 export type DrawingAction = 'generate' | 'reference_generate' | 'edit' | 'mask_edit';
-export type DrawingStatus = 'running' | 'succeeded' | 'failed';
+export type DrawingStatus = 'running' | 'succeeded' | 'failed' | 'stopped';
 export type DrawingQuality = 'low' | 'medium' | 'high' | 'auto';
 export type DrawingOutputFormat = 'png' | 'jpeg' | 'webp';
 export type DrawingBackground = 'auto' | 'opaque' | 'transparent';
+export type DrawingReferenceImageMode = 'multipart' | 'base64';
 
 export interface DrawingSettings {
   providerId: string;
@@ -535,6 +536,7 @@ export interface DrawingSettings {
   outputFormat: DrawingOutputFormat;
   background: DrawingBackground;
   outputCompression?: number;
+  referenceImageMode: DrawingReferenceImageMode;
   n: number;
 }
 
@@ -593,6 +595,7 @@ export interface DrawingGenerateInput {
   background: DrawingBackground;
   output_compression?: number;
   n: number;
+  reference_image_mode: DrawingReferenceImageMode;
   reference_file_ids: string[];
 }
 
