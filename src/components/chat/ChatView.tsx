@@ -2,7 +2,7 @@ import React, { useMemo, useCallback, useRef, useState, useEffect } from 'react'
 import { CloseCircleFilled, SyncOutlined } from '@ant-design/icons';
 import { Typography, Button, Dropdown, Input, App, Avatar, Alert, Popconfirm, Popover, theme, Tag, Image, Tooltip, Modal, Spin } from 'antd';
 import type { InputRef } from 'antd';
-import { Pencil, Share2, FileImage, FileCode, FileText, FileType, Bot, Brain, Lightbulb, Code, Languages, Copy, Check, RotateCcw, User, Trash2, ChevronLeft, ChevronRight, ChevronDown, Scissors, Paperclip, AlertCircle, X, ArrowDown, ArrowUp, ArrowLeftRight, Zap, Sparkles, TextCursorInput, GitBranch, ChartNoAxesColumn, MessageSquare, ArrowUpRight, ArrowDownRight, Coins, Clock, Timer, Download } from 'lucide-react';
+import { Pencil, Share2, FileImage, FileCode, FileText, FileType, Bot, Brain, Lightbulb, Code, Languages, Copy, Check, RotateCcw, User, Trash2, ChevronLeft, ChevronRight, ChevronDown, Scissors, Paperclip, AlertCircle, X, ArrowDown, ArrowUp, ArrowLeftRight, Zap, Sparkles, TextCursorInput, GitBranch, ChartNoAxesColumn, MessageSquare, ArrowUpRight, ArrowDownRight, Coins, Clock, Timer, Download, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { ModelIcon } from '@lobehub/icons';
 import { getConvIcon } from '@/lib/convIcon';
 import Bubble from '@ant-design/x/es/bubble';
@@ -1971,7 +1971,9 @@ export function ChatView() {
   const createConversation = useConversationStore((s) => s.createConversation);
   const providers = useProviderStore((s) => s.providers);
   const settings = useSettingsStore((s) => s.settings);
+  const saveSettings = useSettingsStore((s) => s.saveSettings);
   const bubbleStyle = settings.bubble_style;
+  const chatSidebarCollapsed = settings.chat_sidebar_collapsed ?? false;
   const profile = useUserProfileStore((s) => s.profile);
   const resolvedAvatarSrc = useResolvedAvatarSrc(profile.avatarType, profile.avatarValue);
   const isDarkMode = useResolvedDarkMode(settings.theme_mode);
@@ -2028,6 +2030,24 @@ export function ChatView() {
     }
     return <Avatar icon={<Bot size={16} />} style={{ background: token.colorPrimary }} size={size} />;
   }, [activeConversation, token.colorPrimary, token.colorPrimaryBg]);
+
+  const handleChatSidebarToggle = useCallback(() => {
+    void saveSettings({ chat_sidebar_collapsed: !chatSidebarCollapsed });
+  }, [chatSidebarCollapsed, saveSettings]);
+
+  const renderChatSidebarToggle = useCallback(() => {
+    const label = t(chatSidebarCollapsed ? 'chat.expandSidebar' : 'chat.collapseSidebar');
+    return (
+      <Button
+        type="text"
+        size="small"
+        aria-label={label}
+        icon={chatSidebarCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+        onClick={handleChatSidebarToggle}
+        style={{ flexShrink: 0 }}
+      />
+    );
+  }, [chatSidebarCollapsed, handleChatSidebarToggle, t]);
 
   // ── User avatar helper (mirrors Sidebar.tsx pattern) ───────────────
   const renderUserAvatar = useCallback(() => {
@@ -3634,6 +3654,7 @@ export function ChatView() {
       <div className="flex items-center gap-2 px-3 py-3">
         {activeConversation ? (
           <>
+            {renderChatSidebarToggle()}
             {renderConvIconForChat(24)}
             {editingTitle ? (
               <div className="flex items-center gap-1">
@@ -3690,6 +3711,7 @@ export function ChatView() {
           </>
         ) : (
           <>
+            {renderChatSidebarToggle()}
             <Typography.Text type="secondary">{t('chat.welcome')}</Typography.Text>
             <div className="flex-1" />
             <ModelSelector />

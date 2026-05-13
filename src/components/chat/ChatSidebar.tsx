@@ -1299,7 +1299,7 @@ export function ChatSidebar() {
             </>
           )}
         </div>
-        <div>
+        <div className="flex items-center gap-1">
           {showArchived ? (
             archivedMultiSelect ? (
               <div className="flex items-center gap-1">

@@ -649,6 +649,7 @@ pub struct AppSettings {
     pub shortcut_send_message: String,
     pub shortcut_open_settings: String,
     pub shortcut_toggle_model_selector: String,
+    pub shortcut_toggle_chat_sidebar: String,
     pub shortcut_fill_last_message: String,
     pub shortcut_clear_context: String,
     pub shortcut_clear_conversation_messages: String,
@@ -700,6 +701,8 @@ pub struct AppSettings {
     /// Chat minimap / navigation overlay.
     pub chat_minimap_enabled: bool,
     pub chat_minimap_style: String,
+    /// Collapse the chat page's secondary conversation sidebar.
+    pub chat_sidebar_collapsed: bool,
     /// Timeout before the first chat stream packet in seconds. 0 disables.
     pub chat_stream_first_packet_timeout_secs: u64,
     /// Timeout between chat stream packets in seconds. 0 disables.
@@ -764,6 +767,7 @@ impl Default for AppSettings {
             shortcut_send_message: "Enter".to_string(),
             shortcut_open_settings: "CommandOrControl+Comma".to_string(),
             shortcut_toggle_model_selector: "CommandOrControl+Shift+M".to_string(),
+            shortcut_toggle_chat_sidebar: "CommandOrControl+L".to_string(),
             shortcut_fill_last_message: "CommandOrControl+Shift+ArrowUp".to_string(),
             shortcut_clear_context: "CommandOrControl+Shift+K".to_string(),
             shortcut_clear_conversation_messages: "CommandOrControl+Shift+Backspace".to_string(),
@@ -809,6 +813,7 @@ impl Default for AppSettings {
             default_system_prompt: None,
             chat_minimap_enabled: false,
             chat_minimap_style: "faq".to_string(),
+            chat_sidebar_collapsed: false,
             chat_stream_first_packet_timeout_secs: 180,
             chat_stream_idle_timeout_secs: 90,
             document_attachment_reading_enabled: false,
@@ -867,6 +872,22 @@ mod app_settings_tests {
 
         assert_eq!(settings.chat_stream_first_packet_timeout_secs, 45);
         assert_eq!(settings.chat_stream_idle_timeout_secs, 12);
+    }
+
+    #[test]
+    fn chat_sidebar_collapsed_defaults_to_false_and_roundtrips() {
+        let settings = AppSettings::default();
+        assert!(!settings.chat_sidebar_collapsed);
+
+        let settings: AppSettings = serde_json::from_value(json!({
+            "chat_sidebar_collapsed": true
+        }))
+        .expect("settings should deserialize");
+        assert!(settings.chat_sidebar_collapsed);
+
+        let settings: AppSettings =
+            serde_json::from_value(json!({})).expect("settings should default missing fields");
+        assert!(!settings.chat_sidebar_collapsed);
     }
 }
 

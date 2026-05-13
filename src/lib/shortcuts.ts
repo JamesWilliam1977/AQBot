@@ -8,6 +8,7 @@ export type ShortcutAction =
   | 'sendMessage'
   | 'openSettings'
   | 'toggleModelSelector'
+  | 'toggleChatSidebar'
   | 'fillLastMessage'
   | 'clearContext'
   | 'clearConversationMessages'
@@ -27,6 +28,7 @@ export const SHORTCUT_ACTIONS: ShortcutAction[] = [
   'newConversation',
   'openSettings',
   'toggleModelSelector',
+  'toggleChatSidebar',
   'fillLastMessage',
   'clearContext',
   'clearConversationMessages',
@@ -47,6 +49,7 @@ export const SHORTCUT_DESCRIPTORS: ShortcutDescriptor[] = [
   { action: 'sendMessage', labelKey: 'settings.shortcutAction.sendMessage', supportsGlobal: false },
   { action: 'openSettings', labelKey: 'settings.shortcutAction.openSettings', supportsGlobal: false },
   { action: 'toggleModelSelector', labelKey: 'settings.shortcutAction.toggleModelSelector', supportsGlobal: false },
+  { action: 'toggleChatSidebar', labelKey: 'settings.shortcutAction.toggleChatSidebar', supportsGlobal: false },
   { action: 'fillLastMessage', labelKey: 'settings.shortcutAction.fillLastMessage', supportsGlobal: false },
   { action: 'clearContext', labelKey: 'settings.shortcutAction.clearContext', supportsGlobal: false },
   { action: 'clearConversationMessages', labelKey: 'settings.shortcutAction.clearConversationMessages', supportsGlobal: false },
@@ -62,6 +65,7 @@ export const SHORTCUT_ACTION_LABEL_KEYS: Record<ShortcutAction, string> = {
   sendMessage: 'settings.shortcutAction.sendMessage',
   openSettings: 'settings.shortcutAction.openSettings',
   toggleModelSelector: 'settings.shortcutAction.toggleModelSelector',
+  toggleChatSidebar: 'settings.shortcutAction.toggleChatSidebar',
   fillLastMessage: 'settings.shortcutAction.fillLastMessage',
   clearContext: 'settings.shortcutAction.clearContext',
   clearConversationMessages: 'settings.shortcutAction.clearConversationMessages',
@@ -89,6 +93,7 @@ export const SHORTCUT_SETTING_KEYS = {
   sendMessage: 'shortcut_send_message',
   openSettings: 'shortcut_open_settings',
   toggleModelSelector: 'shortcut_toggle_model_selector',
+  toggleChatSidebar: 'shortcut_toggle_chat_sidebar',
   fillLastMessage: 'shortcut_fill_last_message',
   clearContext: 'shortcut_clear_context',
   clearConversationMessages: 'shortcut_clear_conversation_messages',
@@ -106,6 +111,7 @@ export const DEFAULT_SHORTCUT_BINDINGS: Record<ShortcutAction, string> = {
   sendMessage: 'Enter',
   openSettings: 'CmdOrCtrl+,',
   toggleModelSelector: 'CmdOrCtrl+Shift+M',
+  toggleChatSidebar: 'CmdOrCtrl+L',
   fillLastMessage: 'CmdOrCtrl+Shift+ArrowUp',
   clearContext: 'CmdOrCtrl+Shift+K',
   clearConversationMessages: 'CmdOrCtrl+Shift+Backspace',

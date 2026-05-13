@@ -77,6 +77,19 @@ export function ConversationSettings() {
         </div>
       </SettingsGroup>
 
+      <SettingsGroup title={t('settings.chatSidebar')}>
+        <div className="flex items-center justify-between" style={rowStyle}>
+          <div>
+            <div>{t('settings.chatSidebarCollapsed')}</div>
+            <div style={{ fontSize: 12, color: token.colorTextDescription }}>{t('settings.chatSidebarCollapsedDesc')}</div>
+          </div>
+          <Switch
+            checked={settings.chat_sidebar_collapsed ?? false}
+            onChange={(checked) => saveSettings({ chat_sidebar_collapsed: checked })}
+          />
+        </div>
+      </SettingsGroup>
+
       <SettingsGroup title={t('settings.chatStreamTimeouts')}>
         <div style={{ fontSize: 12, color: token.colorTextDescription, marginBottom: 12 }}>
           {t('settings.chatStreamTimeoutsDesc')}

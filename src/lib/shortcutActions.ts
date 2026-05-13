@@ -99,6 +99,10 @@ export async function executeShortcutAction(action: ShortcutAction): Promise<voi
       notifyShortcutTriggered(action);
       dispatchChatScopedEvent('aqbot:toggle-model-selector');
       return;
+    case 'toggleChatSidebar':
+      notifyShortcutTriggered(action);
+      dispatchChatScopedEvent('aqbot:toggle-chat-sidebar');
+      return;
     case 'fillLastMessage':
       notifyShortcutTriggered(action);
       dispatchChatScopedEvent('aqbot:fill-last-message');

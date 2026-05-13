@@ -383,6 +383,7 @@ const DEFAULT_SETTINGS = {
   shortcut_send_message: 'Enter',
   shortcut_open_settings: 'CmdOrCtrl+,',
   shortcut_toggle_model_selector: 'CmdOrCtrl+Shift+M',
+  shortcut_toggle_chat_sidebar: 'CmdOrCtrl+L',
   shortcut_fill_last_message: 'CmdOrCtrl+Shift+ArrowUp',
   shortcut_clear_context: 'CmdOrCtrl+Shift+K',
   shortcut_clear_conversation_messages: 'CmdOrCtrl+Shift+Backspace',
@@ -397,6 +398,7 @@ const DEFAULT_SETTINGS = {
   backup_interval_hours: 24,
   content_safety_enabled: true,
   last_selected_conversation_id: null,
+  chat_sidebar_collapsed: false,
   chat_stream_first_packet_timeout_secs: 180,
   chat_stream_idle_timeout_secs: 90,
 };

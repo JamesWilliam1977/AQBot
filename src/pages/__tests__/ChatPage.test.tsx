@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { ChatPage } from '../ChatPage';
 
 const fetchConversations = vi.fn();
 const fetchProviders = vi.fn();
+const saveSettings = vi.fn();
 
 const conversationState = {
   conversations: [] as Array<{ id: string }>,
@@ -15,7 +16,30 @@ const providerState = {
   fetchProviders,
 };
 
+const settingsState = {
+  settings: {
+    chat_sidebar_collapsed: false,
+  },
+  saveSettings,
+};
+const chatSidebarProps: Array<Record<string, unknown>> = [];
+
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({
+    t: (key: string) => ({
+      'chat.expandSidebar': '展开左侧对话栏',
+      'chat.collapseSidebar': '折叠左侧对话栏',
+    }[key] ?? key),
+  }),
+}));
+
 vi.mock('antd', () => ({
+  Button: ({ icon, onClick, 'aria-label': ariaLabel }: any) => (
+    <button type="button" aria-label={ariaLabel} onClick={onClick}>
+      {icon}
+    </button>
+  ),
+  Tooltip: ({ children }: any) => <>{children}</>,
   theme: {
     useToken: () => ({
       token: {
@@ -29,10 +53,14 @@ vi.mock('antd', () => ({
 vi.mock('@/stores', () => ({
   useConversationStore: (selector: (state: typeof conversationState) => unknown) => selector(conversationState),
   useProviderStore: (selector: (state: typeof providerState) => unknown) => selector(providerState),
+  useSettingsStore: (selector: (state: typeof settingsState) => unknown) => selector(settingsState),
 }));
 
 vi.mock('@/components/chat/ChatSidebar', () => ({
-  ChatSidebar: () => <div>sidebar</div>,
+  ChatSidebar: (props: Record<string, unknown>) => {
+    chatSidebarProps.push(props);
+    return <div>sidebar</div>;
+  },
 }));
 
 vi.mock('@/components/chat/ChatView', () => ({
@@ -44,6 +72,8 @@ describe('ChatPage', () => {
     vi.clearAllMocks();
     conversationState.conversations = [];
     providerState.providers = [];
+    settingsState.settings.chat_sidebar_collapsed = false;
+    chatSidebarProps.length = 0;
   });
 
   it('fetches conversations and providers only when the stores are empty', () => {
@@ -61,5 +91,30 @@ describe('ChatPage', () => {
 
     expect(fetchConversations).not.toHaveBeenCalled();
     expect(fetchProviders).not.toHaveBeenCalled();
+  });
+
+  it('renders the full chat sidebar by default without passing a page-level collapse callback', () => {
+    render(<ChatPage />);
+
+    expect(screen.getByText('sidebar')).toBeInTheDocument();
+    expect(chatSidebarProps[chatSidebarProps.length - 1]?.onCollapse).toBeUndefined();
+  });
+
+  it('keeps the chat sidebar mounted inside a hidden zero-width shell when collapsed', () => {
+    settingsState.settings.chat_sidebar_collapsed = true;
+
+    render(<ChatPage />);
+
+    expect(screen.getByText('sidebar')).toBeInTheDocument();
+    expect(screen.getByTestId('chat-sidebar-shell')).toHaveStyle({
+      width: '0px',
+      overflow: 'hidden',
+    });
+    expect(screen.getByTestId('chat-sidebar-content')).toHaveStyle({
+      opacity: '0',
+      visibility: 'hidden',
+      pointerEvents: 'none',
+    });
+    expect(screen.queryByRole('button', { name: '展开左侧对话栏' })).not.toBeInTheDocument();
   });
 });

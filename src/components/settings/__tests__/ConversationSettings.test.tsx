@@ -20,6 +20,9 @@ vi.mock('react-i18next', () => ({
         'settings.chatStreamTimeoutsDesc': '设置模型流式响应的首包和空闲等待时间，填 0 表示不限制。',
         'settings.chatStreamFirstPacketTimeout': '首包超时',
         'settings.chatStreamIdleTimeout': '空闲超时',
+        'settings.chatSidebar': '左侧对话栏',
+        'settings.chatSidebarCollapsed': '左侧对话栏默认折叠',
+        'settings.chatSidebarCollapsedDesc': '开启后，对话页左侧对话栏会默认收起，聊天区域获得更多横向空间。',
         'settings.documentAttachmentReading': '读取文档附件',
         'settings.documentAttachmentReadingDesc': '开启后，PDF、DOC、DOCX 附件会解析为文本并发送给模型，不会加入知识库。',
         'settings.showImageModelsInModelSelector': '模型选择器中显示绘画模型',
@@ -123,6 +126,7 @@ describe('ConversationSettings', () => {
       show_image_models_in_model_selector: false,
       chat_stream_first_packet_timeout_secs: 180,
       chat_stream_idle_timeout_secs: 90,
+      chat_sidebar_collapsed: false,
     };
   });
 
@@ -197,6 +201,20 @@ describe('ConversationSettings', () => {
     fireEvent.change(screen.getByLabelText('空闲超时'), { target: { value: '0' } });
     expect(mocks.saveSettings).toHaveBeenCalledWith({
       chat_stream_idle_timeout_secs: 0,
+    });
+  });
+
+  it('saves the chat sidebar collapsed setting when toggled', () => {
+    render(<ConversationSettings />);
+
+    const sidebarGroup = screen.getByText('左侧对话栏').parentElement?.parentElement;
+    expect(sidebarGroup).not.toBeNull();
+    const toggle = within(sidebarGroup as HTMLElement).getByRole('switch');
+
+    fireEvent.click(toggle);
+
+    expect(mocks.saveSettings).toHaveBeenCalledWith({
+      chat_sidebar_collapsed: true,
     });
   });
 });

@@ -410,6 +410,7 @@ export interface AppSettings {
   shortcut_send_message: string;
   shortcut_open_settings: string;
   shortcut_toggle_model_selector: string;
+  shortcut_toggle_chat_sidebar: string;
   shortcut_fill_last_message: string;
   shortcut_clear_context: string;
   shortcut_clear_conversation_messages: string;
@@ -457,6 +458,8 @@ export interface AppSettings {
   /** Chat minimap / navigation overlay */
   chat_minimap_enabled?: boolean;
   chat_minimap_style?: 'faq' | 'sticky';
+  /** Collapse the chat page's secondary conversation sidebar. Default: false */
+  chat_sidebar_collapsed?: boolean;
   /** Timeout before the first chat stream packet in seconds. 0 disables. */
   chat_stream_first_packet_timeout_secs?: number;
   /** Timeout between chat stream packets in seconds. 0 disables. */

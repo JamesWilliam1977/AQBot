@@ -341,6 +341,9 @@ describe('ChatSidebar direct delete shortcut', () => {
     );
 
     expect(source).not.toContain('aqbot-chat-conversation-direct-delete');
+    expect(source).not.toContain('PanelLeftClose');
+    expect(source).not.toContain('onCollapse');
+    expect(source).not.toContain('chat.collapseSidebar');
     expect(source).toContain('.ant-conversations .ant-conversations-item-active .aqbot-chat-conversation-menu-delete');
     expect(source).toContain('opacity: 0;');
   });
@@ -416,4 +419,5 @@ describe('ChatSidebar direct delete shortcut', () => {
       );
     });
   });
+
 });
