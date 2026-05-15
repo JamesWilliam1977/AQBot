@@ -1,6 +1,6 @@
 import type { Message } from '@/types';
 
-function getVersionGroupKey(version: Message): string {
+export function getMessageVersionGroupKey(version: Message): string {
   if (version.model_id) {
     return `${version.provider_id ?? '__provider__'}:${version.model_id}`;
   }
@@ -13,7 +13,7 @@ function getVersionGroupKey(version: Message): string {
 export function getLatestVersionsByModel(versions: Message[]): Message[] {
   const modelMap = new Map<string, Message>();
   for (const version of versions) {
-    const key = getVersionGroupKey(version);
+    const key = getMessageVersionGroupKey(version);
     const existing = modelMap.get(key);
     if (!existing || version.version_index > existing.version_index) {
       modelMap.set(key, version);
@@ -25,11 +25,13 @@ export function getLatestVersionsByModel(versions: Message[]): Message[] {
 export function selectDisplayVersionsByModel(
   versions: Message[],
   activeMessageId?: string | null,
+  displayMessageIdsByModelKey?: ReadonlyMap<string, string> | Record<string, string | undefined> | null,
 ): Message[] {
-  const modelMap = new Map<string, { latest: Message; active: Message | null }>();
+  const modelMap = new Map<string, { latest: Message; active: Message | null; selected: Message | null }>();
   for (const version of versions) {
-    const key = getVersionGroupKey(version);
+    const key = getMessageVersionGroupKey(version);
     const existing = modelMap.get(key);
+    const selectedMessageId = getDisplayMessageId(displayMessageIdsByModelKey, key);
     const isActiveVersion = activeMessageId
       ? version.id === activeMessageId
       : version.is_active;
@@ -38,6 +40,7 @@ export function selectDisplayVersionsByModel(
       modelMap.set(key, {
         latest: version,
         active: isActiveVersion ? version : null,
+        selected: selectedMessageId === version.id ? version : null,
       });
       continue;
     }
@@ -48,9 +51,42 @@ export function selectDisplayVersionsByModel(
     if (isActiveVersion) {
       existing.active = version;
     }
+    if (selectedMessageId === version.id) {
+      existing.selected = version;
+    }
   }
 
-  return Array.from(modelMap.values()).map((group) => group.active ?? group.latest);
+  return Array.from(modelMap.values()).map((group) => group.selected ?? group.active ?? group.latest);
+}
+
+export interface PendingDisplayVersionSelection {
+  messageId: string;
+  versionIndex: number;
+  createdAt: number;
+}
+
+export function resolvePendingDisplayVersionSelection(
+  versions: Message[],
+  modelKey: string,
+  selectedMessageId: string | null | undefined,
+  pending: PendingDisplayVersionSelection | null | undefined,
+): string | null {
+  if (!selectedMessageId) return null;
+  if (versions.some((version) => version.id === selectedMessageId)) {
+    return selectedMessageId;
+  }
+  if (!pending || pending.messageId !== selectedMessageId) {
+    return selectedMessageId;
+  }
+
+  const resolved = versions
+    .filter((version) =>
+      getMessageVersionGroupKey(version) === modelKey
+      && version.version_index >= pending.versionIndex
+    )
+    .sort(compareVersionDesc)[0];
+
+  return resolved?.id ?? selectedMessageId;
 }
 
 export function hasMultipleModelVersions(versions: Message[]): boolean {
@@ -71,6 +107,17 @@ function compareVersionDesc(left: Message, right: Message): number {
   return right.version_index - left.version_index
     || right.created_at - left.created_at
     || right.id.localeCompare(left.id);
+}
+
+function getDisplayMessageId(
+  selections: ReadonlyMap<string, string> | Record<string, string | undefined> | null | undefined,
+  key: string,
+): string | null {
+  if (!selections) return null;
+  if (typeof (selections as ReadonlyMap<string, string>).get === 'function') {
+    return (selections as ReadonlyMap<string, string>).get(key) ?? null;
+  }
+  return (selections as Record<string, string | undefined>)[key] ?? null;
 }
 
 export function selectNextAssistantVersion(

@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import type { Message } from '@/types';
 import {
+  getMessageVersionGroupKey,
   getLatestVersionsByModel,
   hasMultipleModelVersions,
   applyMultiModelStreamError,
   insertModelVersionPlaceholder,
   mergeAssistantVersionGroup,
   mergeAssistantVersionsAfterSwitch,
+  resolvePendingDisplayVersionSelection,
   selectDisplayVersionsByModel,
   selectRenderableVersionSet,
   selectNextAssistantVersion,
@@ -162,6 +164,123 @@ describe('chatMultiModel helpers', () => {
     );
 
     expect(displayVersions.map((message) => message.id)).toEqual(['model-a-latest', 'model-b']);
+  });
+
+  it('uses a per-model display override without changing the active context version', () => {
+    const activeOldVersion = makeMessage({
+      id: 'model-a-old',
+      model_id: 'model-a',
+      provider_id: 'provider-a',
+      content: 'old answer',
+      is_active: true,
+      version_index: 0,
+      created_at: 1,
+    });
+    const displayOverrideVersion = makeMessage({
+      id: 'model-a-new',
+      model_id: 'model-a',
+      provider_id: 'provider-a',
+      content: 'new answer',
+      is_active: false,
+      version_index: 1,
+      created_at: 2,
+    });
+    const otherModel = makeMessage({
+      id: 'model-b',
+      model_id: 'model-b',
+      provider_id: 'provider-b',
+      content: 'other answer',
+      is_active: false,
+      version_index: 0,
+      created_at: 3,
+    });
+
+    const displayVersions = selectDisplayVersionsByModel(
+      [activeOldVersion, displayOverrideVersion, otherModel],
+      activeOldVersion.id,
+      new Map([[getMessageVersionGroupKey(displayOverrideVersion), displayOverrideVersion.id]]),
+    );
+
+    expect(displayVersions.map((message) => message.id)).toEqual(['model-a-new', 'model-b']);
+    expect(activeOldVersion.is_active).toBe(true);
+  });
+
+  it('falls back to the active or latest model version when a display override is stale', () => {
+    const activeOldVersion = makeMessage({
+      id: 'model-a-old',
+      model_id: 'model-a',
+      provider_id: 'provider-a',
+      is_active: true,
+      version_index: 0,
+      created_at: 1,
+    });
+    const latestVersion = makeMessage({
+      id: 'model-a-new',
+      model_id: 'model-a',
+      provider_id: 'provider-a',
+      is_active: false,
+      version_index: 1,
+      created_at: 2,
+    });
+
+    const displayVersions = selectDisplayVersionsByModel(
+      [activeOldVersion, latestVersion],
+      activeOldVersion.id,
+      new Map([[getMessageVersionGroupKey(activeOldVersion), 'deleted-version']]),
+    );
+
+    expect(displayVersions.map((message) => message.id)).toEqual(['model-a-old']);
+  });
+
+  it('keeps a pending regenerated page selected until the real streaming version appears', () => {
+    const previousVersion = makeMessage({
+      id: 'model-a-v4',
+      model_id: 'model-a',
+      provider_id: 'provider-a',
+      is_active: false,
+      version_index: 3,
+      created_at: 4,
+    });
+    const modelKey = getMessageVersionGroupKey(previousVersion);
+
+    const unresolved = resolvePendingDisplayVersionSelection(
+      [previousVersion],
+      modelKey,
+      'temp-assistant-v5',
+      { messageId: 'temp-assistant-v5', versionIndex: 4, createdAt: 5 },
+    );
+
+    expect(unresolved).toBe('temp-assistant-v5');
+  });
+
+  it('resolves a pending regenerated page from temp id to the real streaming id', () => {
+    const previousVersion = makeMessage({
+      id: 'model-a-v4',
+      model_id: 'model-a',
+      provider_id: 'provider-a',
+      is_active: false,
+      version_index: 3,
+      created_at: 4,
+    });
+    const streamingVersion = makeMessage({
+      id: 'model-a-v5',
+      model_id: 'model-a',
+      provider_id: 'provider-a',
+      is_active: false,
+      status: 'partial',
+      version_index: 4,
+      created_at: 5,
+    });
+    const modelKey = getMessageVersionGroupKey(streamingVersion);
+
+    const resolved = resolvePendingDisplayVersionSelection(
+      [previousVersion, streamingVersion],
+      modelKey,
+      'temp-assistant-v5',
+      { messageId: 'temp-assistant-v5', versionIndex: 4, createdAt: 5 },
+    );
+
+    expect(resolved).toBe('model-a-v5');
   });
 
   it('picks a remaining fallback version after deleting the active one', () => {

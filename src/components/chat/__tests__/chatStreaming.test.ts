@@ -7,6 +7,7 @@ import {
   closeStreamingThinkBlock,
   isAssistantStreamingForRender,
   shouldRenderAssistantMarkdownFromContent,
+  shouldShowInitialStreamingDots,
   splitLeadingAqbotDisplayContent,
   stripLeadingAqbotDisplayTags,
 } from '../chatStreaming';
@@ -33,6 +34,17 @@ describe('chat streaming helpers', () => {
     expect(shouldRenderAssistantMarkdownFromContent(true, false)).toBe(true);
     expect(shouldRenderAssistantMarkdownFromContent(false, true)).toBe(true);
     expect(shouldRenderAssistantMarkdownFromContent(false, false)).toBe(false);
+  });
+
+  it('shows initial streaming dots for empty model content', () => {
+    const stripDisplayTags = (content: string) => content
+      .replace(/<knowledge-retrieval [^>]*data-aqbot="1"[^>]*>[\s\S]*?<\/knowledge-retrieval>\s*/g, '')
+      .trim();
+
+    expect(shouldShowInitialStreamingDots(true, '', stripDisplayTags)).toBe(true);
+    expect(shouldShowInitialStreamingDots(true, '<knowledge-retrieval status="done" data-aqbot="1">[]</knowledge-retrieval>', stripDisplayTags)).toBe(true);
+    expect(shouldShowInitialStreamingDots(true, 'answer', stripDisplayTags)).toBe(false);
+    expect(shouldShowInitialStreamingDots(false, '', stripDisplayTags)).toBe(false);
   });
 
   it('ignores display-only tags when deciding whether model text exists', () => {

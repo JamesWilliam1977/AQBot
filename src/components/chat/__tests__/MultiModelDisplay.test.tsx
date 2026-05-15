@@ -1,6 +1,7 @@
 import { App } from 'antd';
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type React from 'react';
 import type { Message } from '@/types';
 import { useConversationStore } from '@/stores';
 import { MultiModelDisplay } from '../MultiModelDisplay';
@@ -17,6 +18,10 @@ vi.mock('@lobehub/icons', () => ({
 
 vi.mock('overlayscrollbars', () => ({
   OverlayScrollbars: vi.fn(() => ({ destroy: vi.fn() })),
+}));
+
+vi.mock('../ModelSelector', () => ({
+  ModelSelector: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
 }));
 
 function makeMessage(overrides: Partial<Message> & Pick<Message, 'id' | 'model_id' | 'content'>): Message {
@@ -48,6 +53,7 @@ function renderDisplay(
   versions: Message[],
   activeMessageId = versions[0]?.id ?? '',
   mode: 'side-by-side' | 'stacked' = 'side-by-side',
+  props: Partial<React.ComponentProps<typeof MultiModelDisplay>> = {},
 ) {
   return (
     <App>
@@ -62,6 +68,7 @@ function renderDisplay(
         multiModelDoneMessageIds={[]}
         getModelDisplayInfo={(modelId) => ({ modelName: modelId ?? '', providerName: '' })}
         renderContent={(message) => <div>{message.content}</div>}
+        {...props}
       />
     </App>
   );
@@ -220,5 +227,113 @@ describe('MultiModelDisplay', () => {
     render(renderDisplayWithStreamingLabel([modelA, modelB], null));
 
     expect(screen.getByTestId('content-assistant-b')).toHaveTextContent('streaming:```ts');
+  });
+
+  it('routes per-card actions to the displayed message without switching context', () => {
+    const modelA = makeMessage({ id: 'assistant-a', model_id: 'model-a', content: 'alpha' });
+    const modelB = makeMessage({ id: 'assistant-b', model_id: 'model-b', content: 'beta', is_active: false, version_index: 1 });
+    const onRegenerateVersion = vi.fn();
+    const onSetContextVersion = vi.fn();
+    const onSwitchVersion = vi.fn();
+
+    render(renderDisplay([modelA, modelB], modelA.id, 'side-by-side', {
+      onRegenerateVersion,
+      onSetContextVersion,
+      onSwitchVersion,
+    }));
+
+    fireEvent.click(screen.getByTestId('multi-model-regenerate-assistant-b'));
+    expect(onRegenerateVersion).toHaveBeenCalledWith(modelB);
+    expect(onSwitchVersion).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('multi-model-set-context-assistant-b'));
+    expect(onSetContextVersion).toHaveBeenCalledWith(modelB);
+  });
+
+  it('keeps context selection in the card header while operations stay in the footer', () => {
+    const modelA = makeMessage({ id: 'assistant-a', model_id: 'model-a', content: 'alpha' });
+    const modelB = makeMessage({ id: 'assistant-b', model_id: 'model-b', content: 'beta', is_active: false, version_index: 1 });
+
+    render(renderDisplay([modelA, modelB], modelA.id, 'side-by-side', {
+      onRegenerateVersion: vi.fn(),
+      onSetContextVersion: vi.fn(),
+    }));
+
+    expect(screen.getByTestId('multi-model-set-context-assistant-b').closest('.multi-model-card-header-actions')).not.toBeNull();
+    expect(screen.getByTestId('multi-model-set-context-assistant-b').closest('.multi-model-card-footer-actions')).toBeNull();
+    expect(screen.getByTestId('multi-model-regenerate-assistant-b').closest('.multi-model-card-footer-actions')).not.toBeNull();
+  });
+
+  it('stretches card content so footer actions stay pinned to the bottom', () => {
+    const modelA = makeMessage({
+      id: 'assistant-a',
+      model_id: 'model-a',
+      content: 'alpha\n\nalpha\n\nalpha\n\nalpha',
+    });
+    const modelB = makeMessage({
+      id: 'assistant-b',
+      model_id: 'model-b',
+      content: 'beta',
+      is_active: false,
+      version_index: 1,
+    });
+
+    render(renderDisplay([modelA, modelB], modelA.id, 'side-by-side', {
+      onRegenerateVersion: vi.fn(),
+    }));
+
+    const shortCard = screen.getByTestId('multi-model-card-assistant-b');
+    const shortContent = screen.getByTestId('multi-model-card-content-assistant-b');
+
+    expect(shortCard).toHaveStyle({
+      display: 'flex',
+      flexDirection: 'column',
+    });
+    expect(shortContent.getAttribute('style')).toContain('flex: 1');
+    expect(shortContent).toHaveStyle({ minHeight: '0' });
+    expect(screen.getByTestId('multi-model-regenerate-assistant-b').closest('.multi-model-card-footer-actions')).not.toBeNull();
+  });
+
+  it('switches the displayed same-model version locally without setting context', () => {
+    const modelAOld = makeMessage({
+      id: 'assistant-a-old',
+      model_id: 'model-a',
+      content: 'old same-model answer',
+      is_active: true,
+      version_index: 0,
+      created_at: 1,
+    });
+    const modelALatest = makeMessage({
+      id: 'assistant-a-latest',
+      model_id: 'model-a',
+      content: 'latest same-model answer',
+      is_active: false,
+      version_index: 1,
+      created_at: 2,
+    });
+    const modelB = makeMessage({
+      id: 'assistant-b',
+      model_id: 'model-b',
+      content: 'other model answer',
+      is_active: false,
+      version_index: 0,
+      created_at: 3,
+    });
+    const onDisplayVersionChange = vi.fn();
+    const onSwitchVersion = vi.fn();
+
+    render(renderDisplay([modelAOld, modelALatest, modelB], modelAOld.id, 'side-by-side', {
+      onDisplayVersionChange,
+      onSwitchVersion,
+    }));
+
+    fireEvent.click(screen.getByTestId('multi-model-version-next-assistant-a-old'));
+
+    expect(onDisplayVersionChange).toHaveBeenCalledWith(
+      modelAOld.parent_message_id,
+      'provider-1:model-a',
+      modelALatest.id,
+    );
+    expect(onSwitchVersion).not.toHaveBeenCalled();
   });
 });

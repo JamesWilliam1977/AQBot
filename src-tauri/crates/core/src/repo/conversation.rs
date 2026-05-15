@@ -268,18 +268,52 @@ pub async fn branch_conversation(
         .all(db)
         .await?;
 
-    // 3. Find the target message index
-    let target_idx = all_msgs
+    // 3. Build the branch candidate list. Normal branches target an active
+    // message. Multi-model cards may target an inactive assistant version, in
+    // which case the selected version replaces its active sibling for the
+    // branch snapshot.
+    let candidate_msgs: Vec<messages::Model> = if let Some(target_idx) = all_msgs
         .iter()
         .position(|m| m.id == until_message_id)
-        .ok_or_else(|| {
+    {
+        all_msgs[..=target_idx].to_vec()
+    } else {
+        let target = messages::Entity::find_by_id(until_message_id)
+            .one(db)
+            .await?
+            .ok_or_else(|| {
+                AQBotError::NotFound(format!("Message {} in conversation", until_message_id))
+            })?;
+
+        if target.conversation_id != conversation_id {
+            return Err(AQBotError::NotFound(format!(
+                "Message {} in conversation {}",
+                until_message_id, conversation_id
+            )));
+        }
+
+        let parent_message_id = target.parent_message_id.clone().ok_or_else(|| {
             AQBotError::NotFound(format!("Message {} in conversation", until_message_id))
         })?;
+        if target.role != "assistant" {
+            return Err(AQBotError::NotFound(format!(
+                "Message {} in conversation",
+                until_message_id
+            )));
+        }
 
-    // 4. Slice messages up to (and including) the target
-    let candidate_msgs = &all_msgs[..=target_idx];
+        let parent_idx = all_msgs
+            .iter()
+            .position(|m| m.id == parent_message_id)
+            .ok_or_else(|| {
+                AQBotError::NotFound(format!("Message {} in conversation", until_message_id))
+            })?;
+        let mut selected_branch = all_msgs[..=parent_idx].to_vec();
+        selected_branch.push(target);
+        selected_branch
+    };
 
-    // 5. Find last context-clear marker to determine effective start
+    // 4. Find last context-clear marker to determine effective start
     let start_idx = candidate_msgs
         .iter()
         .rposition(|m| {
@@ -292,7 +326,7 @@ pub async fn branch_conversation(
 
     let effective_msgs = &candidate_msgs[start_idx..];
 
-    // 6. Create new conversation with copied settings
+    // 5. Create new conversation with copied settings
     let new_id = gen_id();
     let now = now_ts();
     let branch_title = custom_title
@@ -344,7 +378,7 @@ pub async fn branch_conversation(
     .insert(db)
     .await?;
 
-    // 7. Copy messages — assign new IDs and remap parent_message_id references
+    // 6. Copy messages — assign new IDs and remap parent_message_id references
     let mut id_map = std::collections::HashMap::new();
     for msg in effective_msgs {
         let new_msg_id = gen_id();
@@ -527,4 +561,75 @@ pub async fn delete_summary(db: &DatabaseConnection, conversation_id: &str) -> R
         .exec(db)
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::create_test_pool;
+    use crate::repo::message;
+    use crate::types::MessageRole;
+
+    #[tokio::test]
+    async fn branch_conversation_from_inactive_assistant_version_uses_selected_version() {
+        let h = create_test_pool().await.unwrap();
+        let db = &h.conn;
+
+        let conv = create_conversation(db, "Branch Source", "model-a", "provider-a", None)
+            .await
+            .unwrap();
+
+        let user = message::create_message(
+            db,
+            &conv.id,
+            MessageRole::User,
+            "Compare answers",
+            &[],
+            None,
+            0,
+        )
+        .await
+        .unwrap();
+        let active = message::create_message(
+            db,
+            &conv.id,
+            MessageRole::Assistant,
+            "Active answer",
+            &[],
+            Some(&user.id),
+            0,
+        )
+        .await
+        .unwrap();
+        let inactive = message::create_message(
+            db,
+            &conv.id,
+            MessageRole::Assistant,
+            "Inactive answer",
+            &[],
+            Some(&user.id),
+            1,
+        )
+        .await
+        .unwrap();
+        message::set_active_version(db, &conv.id, &user.id, &active.id)
+            .await
+            .unwrap();
+
+        let branched = branch_conversation(
+            db,
+            &conv.id,
+            &inactive.id,
+            false,
+            Some("Branched from inactive"),
+        )
+        .await
+        .unwrap();
+
+        let branched_messages = message::list_messages(db, &branched.id).await.unwrap();
+        assert_eq!(branched_messages.len(), 2);
+        assert_eq!(branched_messages[0].content, "Compare answers");
+        assert_eq!(branched_messages[1].content, "Inactive answer");
+        assert!(branched_messages[1].is_active);
+    }
 }

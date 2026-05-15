@@ -66,6 +66,14 @@ export function hasModelVisibleContent(content: unknown, stripDisplayTags: (cont
   return stripDisplayTags(content).trim().length > 0;
 }
 
+export function shouldShowInitialStreamingDots(
+  isStreaming: boolean,
+  content: unknown,
+  stripDisplayTags: (content: string) => string,
+): boolean {
+  return isStreaming && !hasModelVisibleContent(content, stripDisplayTags);
+}
+
 export function hasAqbotDisplayContent(content: unknown): boolean {
   return typeof content === 'string'
     && /<(?:knowledge-retrieval|memory-retrieval|web-search)\b[^>]*data-aqbot=["']1["'][^>]*>/i.test(content);

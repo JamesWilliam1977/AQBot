@@ -817,8 +817,13 @@ interface ConversationState {
   sendMessage: (content: string, attachments?: AttachmentInput[], searchProviderId?: string | null) => Promise<void>;
   /** Send a message in agent mode (non-streaming MVP) */
   sendAgentMessage: (content: string, attachments?: AttachmentInput[]) => Promise<void>;
-  regenerateMessage: (targetMessageId?: string) => Promise<void>;
-  regenerateWithModel: (targetMessageId: string, providerId: string, modelId: string) => Promise<void>;
+  regenerateMessage: (targetMessageId?: string) => Promise<Message>;
+  regenerateWithModel: (
+    targetMessageId: string,
+    providerId: string,
+    modelId: string,
+    options?: { activate?: boolean },
+  ) => Promise<Message>;
   deleteMessage: (messageId: string) => Promise<void>;
   fetchMessages: (conversationId: string, preserveMessageIds?: string[]) => Promise<void>;
   loadOlderMessages: () => Promise<void>;
@@ -2317,9 +2322,10 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
           : s.messages,
       }));
     }
+    return placeholderAssistant;
   },
 
-  regenerateWithModel: async (targetMessageId: string, providerId: string, modelId: string) => {
+  regenerateWithModel: async (targetMessageId: string, providerId: string, modelId: string, options?: { activate?: boolean }) => {
     const conversationId = get().activeConversationId;
     if (!conversationId) throw new Error('No active conversation');
 
@@ -2336,7 +2342,9 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
     const parentId = userMsg.id;
     const originalAiMsg = msgs.find(m => m.parent_message_id === parentId && m.is_active);
     const parentVersions = msgs.filter((m) => m.parent_message_id === parentId && m.role === 'assistant');
-    const appendAsCompanion = hasMultipleModelVersions(parentVersions);
+    const appendAsCompanion = options?.activate == null
+      ? hasMultipleModelVersions(parentVersions)
+      : !options.activate;
 
     // Create placeholder with the target model info
     const tempAssistantId = `temp-assistant-${Date.now()}`;
@@ -2428,6 +2436,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
           : s.messages,
       }));
     }
+    return placeholderAssistant;
   },
 
   sendMultiModelMessage: async (content, companionModels, attachments = [], searchProviderId = null) => {

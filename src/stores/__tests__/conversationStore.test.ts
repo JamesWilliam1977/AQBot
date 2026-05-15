@@ -1225,6 +1225,128 @@ describe('conversationStore pagination', () => {
     });
   });
 
+  it('can regenerate a selected inactive model version without activating the new response', async () => {
+    invokeMock.mockResolvedValue(undefined);
+    const { useConversationStore } = await import('../conversationStore');
+    const user = {
+      ...makeMessage(1),
+      id: 'user-1',
+      role: 'user' as const,
+      provider_id: null,
+      model_id: null,
+      parent_message_id: null,
+    };
+    const active = {
+      ...makeMessage(2),
+      id: 'assistant-a',
+      provider_id: 'provider-a',
+      model_id: 'model-a',
+      parent_message_id: user.id,
+      is_active: true,
+      status: 'complete' as const,
+    };
+    const inactive = {
+      ...makeMessage(4),
+      id: 'assistant-b',
+      provider_id: 'provider-b',
+      model_id: 'model-b',
+      parent_message_id: user.id,
+      is_active: false,
+      status: 'complete' as const,
+      version_index: 1,
+    };
+
+    useConversationStore.setState({
+      activeConversationId: 'conv-1',
+      messages: [user, active, inactive],
+      enabledMcpServerIds: [],
+      enabledKnowledgeBaseIds: [],
+      enabledMemoryNamespaceIds: [],
+      thinkingBudget: null,
+    });
+
+    const returned = await useConversationStore.getState().regenerateWithModel(inactive.id, 'provider-b', 'model-b', { activate: false });
+
+    expect(invokeMock).toHaveBeenCalledWith('regenerate_with_model', expect.objectContaining({
+      conversationId: 'conv-1',
+      userMessageId: user.id,
+      targetProviderId: 'provider-b',
+      targetModelId: 'model-b',
+      isCompanion: true,
+    }));
+
+    const placeholder = useConversationStore.getState().messages.find(
+      (message) => message.id.startsWith('temp-assistant-') && message.model_id === 'model-b',
+    );
+    expect(returned).toBeDefined();
+    expect(returned.id).toBe(placeholder?.id);
+    expect(placeholder).toMatchObject({
+      provider_id: 'provider-b',
+      is_active: false,
+      status: 'partial',
+    });
+  });
+
+  it('can regenerate a selected active model version as the active response', async () => {
+    invokeMock.mockResolvedValue(undefined);
+    const { useConversationStore } = await import('../conversationStore');
+    const user = {
+      ...makeMessage(1),
+      id: 'user-1',
+      role: 'user' as const,
+      provider_id: null,
+      model_id: null,
+      parent_message_id: null,
+    };
+    const active = {
+      ...makeMessage(2),
+      id: 'assistant-a',
+      provider_id: 'provider-a',
+      model_id: 'model-a',
+      parent_message_id: user.id,
+      is_active: true,
+      status: 'complete' as const,
+    };
+    const inactive = {
+      ...makeMessage(4),
+      id: 'assistant-b',
+      provider_id: 'provider-b',
+      model_id: 'model-b',
+      parent_message_id: user.id,
+      is_active: false,
+      status: 'complete' as const,
+      version_index: 1,
+    };
+
+    useConversationStore.setState({
+      activeConversationId: 'conv-1',
+      messages: [user, active, inactive],
+      enabledMcpServerIds: [],
+      enabledKnowledgeBaseIds: [],
+      enabledMemoryNamespaceIds: [],
+      thinkingBudget: null,
+    });
+
+    await useConversationStore.getState().regenerateWithModel(active.id, 'provider-a', 'model-a', { activate: true });
+
+    expect(invokeMock).toHaveBeenCalledWith('regenerate_with_model', expect.objectContaining({
+      conversationId: 'conv-1',
+      userMessageId: user.id,
+      targetProviderId: 'provider-a',
+      targetModelId: 'model-a',
+      isCompanion: undefined,
+    }));
+
+    const placeholder = useConversationStore.getState().messages.find(
+      (message) => message.id.startsWith('temp-assistant-') && message.model_id === 'model-a',
+    );
+    expect(placeholder).toMatchObject({
+      provider_id: 'provider-a',
+      is_active: true,
+      status: 'partial',
+    });
+  });
+
   it('keeps the same-model regenerate placeholder active while the new answer streams', async () => {
     vi.useFakeTimers();
     const regenerate = deferred<void>();
@@ -1288,7 +1410,13 @@ describe('conversationStore pagination', () => {
     regenerate.resolve();
     await flushPromises();
     await vi.advanceTimersByTimeAsync(600);
-    await pending;
+    await expect(pending).resolves.toMatchObject({
+      id: placeholder?.id,
+      parent_message_id: user.id,
+      model_id: active.model_id,
+      is_active: true,
+      status: 'partial',
+    });
     vi.useRealTimers();
   });
 

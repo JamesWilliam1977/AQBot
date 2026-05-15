@@ -29,9 +29,12 @@ import { parseSearchContent } from '@/lib/searchUtils';
 import { CHAT_CUSTOM_HTML_TAGS, parseChatMarkdown, stripAqbotTags, type ChatMarkdownNode } from '@/lib/chatMarkdown';
 import { normalizeThinkTagsForMarkdown } from '@/lib/thinkTags';
 import {
+  getMessageVersionGroupKey,
   hasMultipleModelVersions,
+  resolvePendingDisplayVersionSelection,
   selectRenderableVersionSet,
   shouldRenderStandaloneAssistantError,
+  type PendingDisplayVersionSelection,
 } from '@/lib/chatMultiModel';
 import { WebSearchNode } from './WebSearchNode';
 import { MemoryRetrievalNode } from './MemoryRetrievalNode';
@@ -59,6 +62,7 @@ import {
   hasModelVisibleContent,
   isAssistantStreamingForRender,
   shouldRenderAssistantMarkdownFromContent,
+  shouldShowInitialStreamingDots,
   splitLeadingAqbotDisplayContent,
   stripLeadingAqbotDisplayTags,
 } from './chatStreaming';
@@ -1311,6 +1315,26 @@ function VersionPagination({
   );
 }
 
+function findLatestLocalGeneratedVersion(
+  parentMessageId: string | null | undefined,
+  providerId: string | null | undefined,
+  modelId: string | null | undefined,
+): Message | null {
+  if (!parentMessageId) return null;
+  const versions = useConversationStore.getState().messages.filter((message) =>
+    message.role === 'assistant'
+    && message.parent_message_id === parentMessageId
+    && (message.provider_id ?? null) === (providerId ?? null)
+    && (message.model_id ?? null) === (modelId ?? null)
+  );
+
+  return [...versions].sort((left, right) =>
+    right.version_index - left.version_index
+    || right.created_at - left.created_at
+    || right.id.localeCompare(left.id)
+  )[0] ?? null;
+}
+
 function ModelTags({
   msg,
   conversationId,
@@ -1520,6 +1544,7 @@ function AssistantFooter({
   displayMode,
   onDisplayModeChange,
   onMultiModelDetected,
+  onRegeneratedVersionCreated,
 }: {
   msg: Message;
   conversationId: string;
@@ -1530,6 +1555,7 @@ function AssistantFooter({
   displayMode?: MultiModelDisplayMode;
   onDisplayModeChange?: (parentMsgId: string, mode: MultiModelDisplayMode) => void;
   onMultiModelDetected?: (parentMsgId: string, versions: Message[]) => void;
+  onRegeneratedVersionCreated?: (message: Message) => void;
 }) {
   const { token } = theme.useToken();
   const { t } = useTranslation();
@@ -1597,17 +1623,24 @@ function AssistantFooter({
 
   const handleModelSelect = useCallback(async (providerId: string, modelId: string) => {
     try {
+      let pending: Promise<Message>;
       if (providerId === msg.provider_id && modelId === msg.model_id) {
         // Same model → regular regenerate
-        await regenerateMessage(msg.id);
+        pending = regenerateMessage(msg.id);
       } else {
         // Different model → generate with new model
-        await regenerateWithModel(msg.id, providerId, modelId);
+        pending = regenerateWithModel(msg.id, providerId, modelId);
       }
+      const localGenerated = findLatestLocalGeneratedVersion(msg.parent_message_id, providerId, modelId);
+      if (localGenerated) onRegeneratedVersionCreated?.(localGenerated);
+      const generated = await pending;
+      onRegeneratedVersionCreated?.(
+        findLatestLocalGeneratedVersion(msg.parent_message_id, providerId, modelId) ?? generated,
+      );
     } catch (e) {
       messageApi.error(String(e));
     }
-  }, [msg.id, msg.provider_id, msg.model_id, regenerateMessage, regenerateWithModel, messageApi]);
+  }, [messageApi, msg.id, msg.model_id, msg.parent_message_id, msg.provider_id, onRegeneratedVersionCreated, regenerateMessage, regenerateWithModel]);
   const totalTokens = (msg.prompt_tokens ?? 0) + (msg.completion_tokens ?? 0);
 
   return (
@@ -1667,7 +1700,13 @@ function AssistantFooter({
               label: t('chat.regenerate'),
               onItemClick: async () => {
                 try {
-                  await regenerateMessage(msg.id);
+                  const pending = regenerateMessage(msg.id);
+                  const localGenerated = findLatestLocalGeneratedVersion(msg.parent_message_id, msg.provider_id, msg.model_id);
+                  if (localGenerated) onRegeneratedVersionCreated?.(localGenerated);
+                  const generated = await pending;
+                  onRegeneratedVersionCreated?.(
+                    findLatestLocalGeneratedVersion(msg.parent_message_id, msg.provider_id, msg.model_id) ?? generated,
+                  );
                 } catch (e) {
                   messageApi.error(String(e));
                 }
@@ -1959,10 +1998,12 @@ export function ChatView() {
   const regenerateTitle = useConversationStore((s) => s.regenerateTitle);
   const loadOlderMessages = useConversationStore((s) => s.loadOlderMessages);
   const regenerateMessage = useConversationStore((s) => s.regenerateMessage);
+  const regenerateWithModel = useConversationStore((s) => s.regenerateWithModel);
   const deleteMessage = useConversationStore((s) => s.deleteMessage);
   const deleteMessageGroup = useConversationStore((s) => s.deleteMessageGroup);
   const switchMessageVersion = useConversationStore((s) => s.switchMessageVersion);
   const updateMessageContent = useConversationStore((s) => s.updateMessageContent);
+  const branchConversation = useConversationStore((s) => s.branchConversation);
   const removeContextClear = useConversationStore((s) => s.removeContextClear);
   const getCompressionSummary = useConversationStore((s) => s.getCompressionSummary);
   const deleteCompression = useConversationStore((s) => s.deleteCompression);
@@ -2108,6 +2149,9 @@ export function ChatView() {
   const [editingMessageRole, setEditingMessageRole] = useState<'user' | 'assistant' | null>(null);
   const [editingContent, setEditingContent] = useState('');
   const [editSaving, setEditSaving] = useState(false);
+  const [cardBranchTarget, setCardBranchTarget] = useState<{ messageId: string; asChild: boolean } | null>(null);
+  const [cardBranchTitle, setCardBranchTitle] = useState('');
+  const [cardBranchSaving, setCardBranchSaving] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
   const titleInputRef = useRef<InputRef>(null);
   const skipTitleSaveRef = useRef(false);
@@ -2738,6 +2782,8 @@ export function ChatView() {
 
   // Per-message display mode overrides (temporary, not persisted)
   const [displayModeOverrides, setDisplayModeOverrides] = useState<Map<string, MultiModelDisplayMode>>(new Map());
+  const [displayVersionOverrides, setDisplayVersionOverrides] = useState<Map<string, Map<string, string>>>(new Map());
+  const [pendingDisplayVersionSelections, setPendingDisplayVersionSelections] = useState<Map<string, Map<string, PendingDisplayVersionSelection>>>(new Map());
   const handleDisplayModeOverride = useCallback((parentMsgId: string, mode: MultiModelDisplayMode) => {
     setDisplayModeOverrides((prev) => {
       const next = new Map(prev);
@@ -2745,6 +2791,158 @@ export function ChatView() {
       return next;
     });
   }, []);
+  const handleDisplayVersionOverride = useCallback((parentMsgId: string, modelKey: string, messageId: string) => {
+    setDisplayVersionOverrides((prev) => {
+      const next = new Map(prev);
+      const modelSelections = new Map(next.get(parentMsgId) ?? []);
+      modelSelections.set(modelKey, messageId);
+      next.set(parentMsgId, modelSelections);
+      return next;
+    });
+  }, []);
+  const handleGeneratedVersionCreated = useCallback((version: Message) => {
+    if (!version.parent_message_id) return;
+    const modelKey = getMessageVersionGroupKey(version);
+    setPendingDisplayVersionSelections((prev) => {
+      const next = new Map(prev);
+      const modelSelections = new Map(next.get(version.parent_message_id!) ?? []);
+      modelSelections.set(modelKey, {
+        messageId: version.id,
+        versionIndex: version.version_index,
+        createdAt: version.created_at,
+      });
+      next.set(version.parent_message_id!, modelSelections);
+      return next;
+    });
+    handleDisplayVersionOverride(
+      version.parent_message_id,
+      modelKey,
+      version.id,
+    );
+  }, [handleDisplayVersionOverride]);
+
+  useEffect(() => {
+    if (pendingDisplayVersionSelections.size === 0) return;
+
+    setDisplayVersionOverrides((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+
+      for (const [parentMsgId, pendingByModel] of pendingDisplayVersionSelections) {
+        const modelSelections = new Map(next.get(parentMsgId) ?? []);
+        const parentVersions = messages.filter((message) =>
+          message.parent_message_id === parentMsgId && message.role === 'assistant'
+        );
+
+        for (const [modelKey, pending] of pendingByModel) {
+          const selectedId = modelSelections.get(modelKey);
+          const resolvedId = resolvePendingDisplayVersionSelection(
+            parentVersions,
+            modelKey,
+            selectedId,
+            pending,
+          );
+          if (resolvedId && resolvedId !== selectedId) {
+            modelSelections.set(modelKey, resolvedId);
+            changed = true;
+          }
+        }
+
+        if (changed) {
+          next.set(parentMsgId, modelSelections);
+        }
+      }
+
+      return changed ? next : prev;
+    });
+
+    setPendingDisplayVersionSelections((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+
+      for (const [parentMsgId, pendingByModel] of prev) {
+        const modelSelections = new Map(pendingByModel);
+        const parentVersions = messages.filter((message) =>
+          message.parent_message_id === parentMsgId && message.role === 'assistant'
+        );
+        const displaySelections = displayVersionOverrides.get(parentMsgId);
+
+        for (const [modelKey, pending] of pendingByModel) {
+          const selectedId = displaySelections?.get(modelKey);
+          const resolvedId = resolvePendingDisplayVersionSelection(
+            parentVersions,
+            modelKey,
+            selectedId,
+            pending,
+          );
+          if (
+            resolvedId
+            && resolvedId !== pending.messageId
+            && parentVersions.some((version) => version.id === resolvedId)
+          ) {
+            modelSelections.delete(modelKey);
+            changed = true;
+          }
+        }
+
+        if (modelSelections.size > 0) {
+          next.set(parentMsgId, modelSelections);
+        } else {
+          next.delete(parentMsgId);
+        }
+      }
+
+      return changed ? next : prev;
+    });
+  }, [displayVersionOverrides, messages, pendingDisplayVersionSelections]);
+
+  const handleRegenerateDisplayedVersion = useCallback(async (version: Message) => {
+    try {
+      let pending: Promise<Message>;
+      if (version.provider_id && version.model_id) {
+        pending = regenerateWithModel(version.id, version.provider_id, version.model_id, { activate: version.is_active });
+      } else {
+        pending = regenerateMessage(version.id);
+      }
+      const localGenerated = findLatestLocalGeneratedVersion(version.parent_message_id, version.provider_id, version.model_id);
+      if (localGenerated) handleGeneratedVersionCreated(localGenerated);
+      const generated = await pending;
+      handleGeneratedVersionCreated(
+        findLatestLocalGeneratedVersion(version.parent_message_id, version.provider_id, version.model_id) ?? generated,
+      );
+    } catch (e) {
+      messageApi.error(String(e));
+    }
+  }, [handleGeneratedVersionCreated, messageApi, regenerateMessage, regenerateWithModel]);
+
+  const handleSwitchDisplayedVersionModel = useCallback(async (version: Message, providerId: string, modelId: string) => {
+    try {
+      const pending = regenerateWithModel(version.id, providerId, modelId, { activate: version.is_active });
+      const localGenerated = findLatestLocalGeneratedVersion(version.parent_message_id, providerId, modelId);
+      if (localGenerated) handleGeneratedVersionCreated(localGenerated);
+      const generated = await pending;
+      handleGeneratedVersionCreated(
+        findLatestLocalGeneratedVersion(version.parent_message_id, providerId, modelId) ?? generated,
+      );
+    } catch (e) {
+      messageApi.error(String(e));
+    }
+  }, [handleGeneratedVersionCreated, messageApi, regenerateWithModel]);
+
+  const handleSetContextVersion = useCallback(async (version: Message) => {
+    if (!activeConversationId || !version.parent_message_id) return;
+    try {
+      await switchMessageVersion(activeConversationId, version.parent_message_id, version.id);
+    } catch (e) {
+      messageApi.error(String(e));
+    }
+  }, [activeConversationId, messageApi, switchMessageVersion]);
+
+  const handleBranchDisplayedVersion = useCallback((version: Message, asChild: boolean) => {
+    const currentTitle = conversations.find((c) => c.id === activeConversationId)?.title ?? '';
+    setCardBranchTarget({ messageId: version.id, asChild });
+    setCardBranchTitle(currentTitle);
+  }, [activeConversationId, conversations]);
 
   const userSearchContentById = useMemo(() => {
     const next = new Map<string, ReturnType<typeof parseSearchContent>>();
@@ -3184,6 +3382,13 @@ export function ChatView() {
       if (versionMessage.status === 'error') {
         return <Alert type="error" message={versionContent} showIcon />;
       }
+      if (shouldShowInitialStreamingDots(versionIsStreaming, versionContent, stripAqbotTags)) {
+        return (
+          <span className="aqbot-streaming-dots" aria-hidden="true">
+            <span /><span /><span />
+          </span>
+        );
+      }
       return (
         <AssistantMarkdown
           content={versionContent}
@@ -3230,6 +3435,13 @@ export function ChatView() {
                 conversationId={activeConversationId}
                 onSwitchVersion={(pid, mid) => switchMessageVersion(activeConversationId, pid, mid)}
                 onDeleteVersion={(mid) => deleteMessage(mid)}
+                onRegenerateVersion={handleRegenerateDisplayedVersion}
+                onEditVersion={(version) => handleEditMessage(version.id, version.content, 'assistant')}
+                onBranchVersion={handleBranchDisplayedVersion}
+                onSwitchModelVersion={handleSwitchDisplayedVersionModel}
+                onSetContextVersion={handleSetContextVersion}
+                onDisplayVersionChange={handleDisplayVersionOverride}
+                displayVersionIdsByModelKey={displayVersionOverrides.get(parentId)}
                 streamingMessageId={streamingMessageId}
                 multiModelDoneMessageIds={multiModelDoneMessageIds}
                 getModelDisplayInfo={getModelDisplayInfo}
@@ -3405,6 +3617,7 @@ export function ChatView() {
             displayMode={effectiveDisplayMode}
             onDisplayModeChange={handleDisplayModeOverride}
             onMultiModelDetected={handleMultiModelDetected}
+            onRegeneratedVersionCreated={handleGeneratedVersionCreated}
           />
         </div>
       ) : footerLoading ? (
@@ -3424,7 +3637,7 @@ export function ChatView() {
         </div>
       ) : null,
     };
-  }, [activeConversation, activeConversationId, activeMessages, agentPendingPermissions, agentToolCalls, aiContentNodesById, assistantByParentId, codeBlockDarkTheme, codeBlockLightTheme, codeBlockThemes, deleteMessage, displayModeOverrides, formatTime, getBubbleVariant, getModelDisplayInfo, handleDisplayModeOverride, handleEditMessage, handleMultiModelDetected, isDarkMode, messageById, messages, multiModelDoneMessageIds, multiModelParentId, multiModelResponseParents, ragDisplayByMessageId, renderConvIconForChat, settings, streaming, streamingMessageId, switchMessageVersion, t, token.colorPrimary, token.colorTextDescription]);
+  }, [activeConversation, activeConversationId, activeMessages, agentPendingPermissions, agentToolCalls, aiContentNodesById, assistantByParentId, codeBlockDarkTheme, codeBlockLightTheme, codeBlockThemes, deleteMessage, displayModeOverrides, displayVersionOverrides, formatTime, getBubbleVariant, getModelDisplayInfo, handleBranchDisplayedVersion, handleDisplayModeOverride, handleDisplayVersionOverride, handleEditMessage, handleGeneratedVersionCreated, handleMultiModelDetected, handleRegenerateDisplayedVersion, handleSetContextVersion, handleSwitchDisplayedVersionModel, isDarkMode, messageById, messages, multiModelDoneMessageIds, multiModelParentId, multiModelResponseParents, ragDisplayByMessageId, renderConvIconForChat, settings, streaming, streamingMessageId, switchMessageVersion, t, token.colorPrimary, token.colorTextDescription]);
 
   const contextClearRole = useCallback((bubbleData: BubbleItemType) => {
     const msgId = String(bubbleData.content ?? '');
@@ -3865,6 +4078,56 @@ export function ChatView() {
           onChange={(e) => setEditingContent(e.target.value)}
           autoSize={{ minRows: 3, maxRows: 12 }}
           style={{ marginTop: 8 }}
+        />
+      </Modal>
+      <Modal
+        title={t('chat.branchConversation')}
+        open={!!cardBranchTarget}
+        onCancel={() => {
+          setCardBranchTarget(null);
+          setCardBranchTitle('');
+        }}
+        onOk={async () => {
+          if (!activeConversationId || !cardBranchTarget) return;
+          setCardBranchSaving(true);
+          try {
+            const title = cardBranchTitle.trim() || activeConversation?.title || '';
+            await branchConversation(activeConversationId, cardBranchTarget.messageId, cardBranchTarget.asChild, title);
+            messageApi.success(t('chat.branchCreated'));
+            setCardBranchTarget(null);
+            setCardBranchTitle('');
+          } catch (e) {
+            messageApi.error(String(e));
+          } finally {
+            setCardBranchSaving(false);
+          }
+        }}
+        okText={t('common.confirm')}
+        cancelText={t('common.cancel')}
+        confirmLoading={cardBranchSaving}
+        width={400}
+        destroyOnClose
+      >
+        <Input
+          value={cardBranchTitle}
+          onChange={(e) => setCardBranchTitle(e.target.value)}
+          placeholder={t('chat.branchTitlePlaceholder')}
+          autoFocus
+          onPressEnter={async () => {
+            if (!activeConversationId || !cardBranchTarget) return;
+            setCardBranchSaving(true);
+            try {
+              const title = cardBranchTitle.trim() || activeConversation?.title || '';
+              await branchConversation(activeConversationId, cardBranchTarget.messageId, cardBranchTarget.asChild, title);
+              messageApi.success(t('chat.branchCreated'));
+              setCardBranchTarget(null);
+              setCardBranchTitle('');
+            } catch (e) {
+              messageApi.error(String(e));
+            } finally {
+              setCardBranchSaving(false);
+            }
+          }}
         />
       </Modal>
       <CodeBlockPreviewModal

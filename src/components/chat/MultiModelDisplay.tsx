@@ -1,14 +1,15 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
-import { Alert, Button, Popconfirm, Tag, Tooltip, Typography, theme } from 'antd';
-import { Check, Columns2, LayoutList, Rows3, Trash2 } from 'lucide-react';
+import { Alert, Button, Dropdown, Popconfirm, Tag, Tooltip, Typography, theme } from 'antd';
+import { ArrowLeftRight, Check, ChevronLeft, ChevronRight, Columns2, GitBranch, LayoutList, Pencil, RotateCcw, Rows3, Trash2 } from 'lucide-react';
 import { ModelIcon } from '@lobehub/icons';
 import { useTranslation } from 'react-i18next';
 import { OverlayScrollbars } from 'overlayscrollbars';
 import type { Message } from '@/types';
 import { CopyButton } from '@/components/common/CopyButton';
 import { stripAqbotTags } from '@/lib/chatMarkdown';
-import { selectDisplayVersionsByModel } from '@/lib/chatMultiModel';
+import { getMessageVersionGroupKey, selectDisplayVersionsByModel } from '@/lib/chatMultiModel';
 import { useConversationStore } from '@/stores';
+import { ModelSelector } from './ModelSelector';
 
 export type MultiModelDisplayMode = 'tabs' | 'side-by-side' | 'stacked';
 
@@ -41,6 +42,13 @@ export interface MultiModelDisplayProps {
   conversationId: string;
   onSwitchVersion: (parentMessageId: string, messageId: string) => void;
   onDeleteVersion?: (messageId: string) => void;
+  onRegenerateVersion?: (message: Message) => void | Promise<void>;
+  onEditVersion?: (message: Message) => void;
+  onBranchVersion?: (message: Message, asChild: boolean) => void;
+  onSwitchModelVersion?: (message: Message, providerId: string, modelId: string) => void | Promise<void>;
+  onSetContextVersion?: (message: Message) => void;
+  onDisplayVersionChange?: (parentMessageId: string, modelKey: string, messageId: string) => void;
+  displayVersionIdsByModelKey?: ReadonlyMap<string, string>;
   renderContent: (msg: Message, isVersionStreaming: boolean) => React.ReactNode;
   getModelDisplayInfo: (
     modelId?: string | null,
@@ -61,6 +69,13 @@ export const MultiModelDisplay = React.memo(function MultiModelDisplay({
   conversationId,
   onSwitchVersion,
   onDeleteVersion,
+  onRegenerateVersion,
+  onEditVersion,
+  onBranchVersion,
+  onSwitchModelVersion,
+  onSetContextVersion,
+  onDisplayVersionChange,
+  displayVersionIdsByModelKey,
   renderContent,
   getModelDisplayInfo,
   streamingMessageId,
@@ -80,6 +95,13 @@ export const MultiModelDisplay = React.memo(function MultiModelDisplay({
         conversationId={conversationId}
         onSwitchVersion={onSwitchVersion}
         onDeleteVersion={onDeleteVersion}
+        onRegenerateVersion={onRegenerateVersion}
+        onEditVersion={onEditVersion}
+        onBranchVersion={onBranchVersion}
+        onSwitchModelVersion={onSwitchModelVersion}
+        onSetContextVersion={onSetContextVersion}
+        onDisplayVersionChange={onDisplayVersionChange}
+        displayVersionIdsByModelKey={displayVersionIdsByModelKey}
         renderContent={renderContent}
         getModelDisplayInfo={getModelDisplayInfo}
         streamingMessageId={streamingMessageId}
@@ -102,6 +124,13 @@ function MultiModelDisplayInner({
   conversationId,
   onSwitchVersion,
   onDeleteVersion,
+  onRegenerateVersion,
+  onEditVersion,
+  onBranchVersion,
+  onSwitchModelVersion,
+  onSetContextVersion,
+  onDisplayVersionChange,
+  displayVersionIdsByModelKey,
   renderContent,
   getModelDisplayInfo,
   streamingMessageId,
@@ -120,8 +149,8 @@ function MultiModelDisplayInner({
   }, [parentMessageId, storeMessages]);
   const renderVersions = liveVersions.length > 0 ? liveVersions : versions;
   const displayVersions = useMemo(
-    () => selectDisplayVersionsByModel(renderVersions, activeMessageId),
-    [activeMessageId, renderVersions],
+    () => selectDisplayVersionsByModel(renderVersions, activeMessageId, displayVersionIdsByModelKey),
+    [activeMessageId, displayVersionIdsByModelKey, renderVersions],
   );
   const isDisplayStreaming = storeStreaming && streamingConversationId === conversationId;
 
@@ -194,6 +223,7 @@ function MultiModelDisplayInner({
           paddingBottom: 8,
           width: '100%',
           boxSizing: 'border-box',
+          alignItems: 'stretch',
         }
       : {
           display: 'flex',
@@ -210,11 +240,15 @@ function MultiModelDisplayInner({
           border: `1px solid ${token.colorBorderSecondary}`,
           borderRadius: token.borderRadiusLG,
           overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
         }
       : {
           border: `1px solid ${token.colorBorderSecondary}`,
           borderRadius: token.borderRadiusLG,
           overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
         };
 
   return (
@@ -232,6 +266,7 @@ function MultiModelDisplayInner({
         return (
           <div
             key={vMsg.id}
+            data-testid={`multi-model-card-${vMsg.id}`}
             style={{
               ...cardStyle,
               borderColor: isActive ? token.colorPrimary : token.colorBorderSecondary,
@@ -246,6 +281,7 @@ function MultiModelDisplayInner({
                 padding: '8px 12px',
                 borderBottom: `1px solid ${token.colorBorderSecondary}`,
                 backgroundColor: token.colorBgLayout,
+                flexShrink: 0,
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -272,56 +308,288 @@ function MultiModelDisplayInner({
                   </span>
                 )}
               </div>
-              {/* Card action buttons */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                <CopyButton
-                  text={() => stripAqbotTags(vMsg.content ?? '')}
-                  size={13}
-                  timeout={3000}
+              <div className="multi-model-card-header-actions" style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <MultiModelContextButton
+                  message={vMsg}
+                  isActive={isActive}
+                  parentMessageId={parentMessageId}
+                  token={token}
+                  t={t}
+                  onSwitchVersion={onSwitchVersion}
+                  onSetContextVersion={onSetContextVersion}
                 />
-                {/* Delete button with confirmation */}
-                {onDeleteVersion && displayVersions.length > 1 && (
-                  <Popconfirm
-                    title={t('chat.deleteConfirm')}
-                    onConfirm={() => onDeleteVersion(vMsg.id)}
-                    okText={t('common.confirm')}
-                    cancelText={t('common.cancel')}
-                  >
-                    <Button type="text" size="small" danger icon={<Trash2 size={13} />} />
-                  </Popconfirm>
-                )}
-                {/* Use as context button */}
-                <div
-                  onClick={() => {
-                    if (!isActive && parentMessageId) {
-                      onSwitchVersion(parentMessageId, vMsg.id);
-                    }
-                  }}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    width: 24,
-                    height: 24,
-                    borderRadius: '50%',
-                    cursor: isActive ? 'default' : 'pointer',
-                    backgroundColor: isActive ? token.colorPrimary : 'transparent',
-                    color: isActive ? '#fff' : token.colorTextSecondary,
-                    border: isActive ? 'none' : `1px solid ${token.colorBorder}`,
-                    transition: 'all 0.2s',
-                  }}
-                >
-                  <Check size={14} />
-                </div>
               </div>
             </div>
             {/* Card content — key includes mode to force re-mount on layout switch */}
-            <div key={`content-${mode}`} style={{ padding: '12px' }}>
+            <div
+              key={`content-${mode}`}
+              data-testid={`multi-model-card-content-${vMsg.id}`}
+              style={{
+                padding: '12px',
+                flex: 1,
+                minHeight: 0,
+              }}
+            >
               {renderContent(vMsg, isVersionStreaming)}
             </div>
+            <MultiModelCardActions
+              message={vMsg}
+              renderVersions={renderVersions}
+              displayVersions={displayVersions}
+              isVersionStreaming={isVersionStreaming}
+              parentMessageId={parentMessageId}
+              token={token}
+              t={t}
+              onDeleteVersion={onDeleteVersion}
+              onRegenerateVersion={onRegenerateVersion}
+              onEditVersion={onEditVersion}
+              onBranchVersion={onBranchVersion}
+              onSwitchModelVersion={onSwitchModelVersion}
+              onDisplayVersionChange={onDisplayVersionChange}
+            />
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function MultiModelContextButton({
+  message,
+  isActive,
+  parentMessageId,
+  token,
+  t,
+  onSwitchVersion,
+  onSetContextVersion,
+}: {
+  message: Message;
+  isActive: boolean;
+  parentMessageId?: string | null;
+  token: ReturnType<typeof theme.useToken>['token'];
+  t: ReturnType<typeof useTranslation>['t'];
+  onSwitchVersion: (parentMessageId: string, messageId: string) => void;
+  onSetContextVersion?: (message: Message) => void;
+}) {
+  const setContext = () => {
+    if (isActive || !parentMessageId) return;
+    if (onSetContextVersion) {
+      onSetContextVersion(message);
+      return;
+    }
+    onSwitchVersion(parentMessageId, message.id);
+  };
+
+  return (
+    <Tooltip title={isActive ? t('chat.currentContext', 'Current context') : t('chat.useAsContext', 'Use as context')}>
+      <button
+        type="button"
+        data-testid={`multi-model-set-context-${message.id}`}
+        disabled={isActive || !parentMessageId}
+        onClick={setContext}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 24,
+          height: 24,
+          borderRadius: '50%',
+          cursor: isActive ? 'default' : 'pointer',
+          backgroundColor: isActive ? token.colorPrimary : 'transparent',
+          color: isActive ? '#fff' : token.colorTextSecondary,
+          border: isActive ? 'none' : `1px solid ${token.colorBorder}`,
+          transition: 'all 0.2s',
+          padding: 0,
+        }}
+      >
+        <Check size={14} />
+      </button>
+    </Tooltip>
+  );
+}
+
+function MultiModelCardActions({
+  message,
+  renderVersions,
+  displayVersions,
+  isVersionStreaming,
+  parentMessageId,
+  token,
+  t,
+  onDeleteVersion,
+  onRegenerateVersion,
+  onEditVersion,
+  onBranchVersion,
+  onSwitchModelVersion,
+  onDisplayVersionChange,
+}: {
+  message: Message;
+  renderVersions: Message[];
+  displayVersions: Message[];
+  isVersionStreaming: boolean;
+  parentMessageId?: string | null;
+  token: ReturnType<typeof theme.useToken>['token'];
+  t: ReturnType<typeof useTranslation>['t'];
+  onDeleteVersion?: (messageId: string) => void;
+  onRegenerateVersion?: (message: Message) => void | Promise<void>;
+  onEditVersion?: (message: Message) => void;
+  onBranchVersion?: (message: Message, asChild: boolean) => void;
+  onSwitchModelVersion?: (message: Message, providerId: string, modelId: string) => void | Promise<void>;
+  onDisplayVersionChange?: (parentMessageId: string, modelKey: string, messageId: string) => void;
+}) {
+  const modelKey = getMessageVersionGroupKey(message);
+  const sameModelVersions = useMemo(
+    () => renderVersions
+      .filter((version) => getMessageVersionGroupKey(version) === modelKey)
+      .sort((left, right) =>
+        left.version_index - right.version_index
+        || left.created_at - right.created_at
+        || left.id.localeCompare(right.id)
+      ),
+    [modelKey, renderVersions],
+  );
+  const currentVersionIndex = sameModelVersions.findIndex((version) => version.id === message.id);
+  const canUseVersionPagination = Boolean(parentMessageId && sameModelVersions.length > 1 && onDisplayVersionChange);
+  const actionsDisabled = isVersionStreaming || message.status === 'partial';
+  const currentModelOverride = message.provider_id && message.model_id
+    ? { providerId: message.provider_id, modelId: message.model_id }
+    : null;
+
+  const switchDisplayedVersion = (nextIndex: number) => {
+    if (!canUseVersionPagination || !parentMessageId) return;
+    const next = sameModelVersions[nextIndex];
+    if (!next) return;
+    onDisplayVersionChange?.(parentMessageId, modelKey, next.id);
+  };
+
+  return (
+    <div
+      className="multi-model-card-footer-actions"
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 8,
+        padding: '6px 10px',
+        borderTop: `1px solid ${token.colorBorderSecondary}`,
+        backgroundColor: token.colorBgContainer,
+        flexShrink: 0,
+      }}
+    >
+      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 2, minWidth: 58 }}>
+        {sameModelVersions.length > 1 && (
+          <>
+            <Button
+              type="text"
+              size="small"
+              icon={<ChevronLeft size={14} />}
+              disabled={!canUseVersionPagination || currentVersionIndex <= 0}
+              data-testid={`multi-model-version-prev-${message.id}`}
+              onClick={() => switchDisplayedVersion(currentVersionIndex - 1)}
+              style={{ minWidth: 20, padding: '0 2px' }}
+            />
+            <Typography.Text style={{ fontSize: 11, color: token.colorTextSecondary }}>
+              {Math.max(currentVersionIndex, 0) + 1}/{sameModelVersions.length}
+            </Typography.Text>
+            <Button
+              type="text"
+              size="small"
+              icon={<ChevronRight size={14} />}
+              disabled={!canUseVersionPagination || currentVersionIndex >= sameModelVersions.length - 1}
+              data-testid={`multi-model-version-next-${message.id}`}
+              onClick={() => switchDisplayedVersion(currentVersionIndex + 1)}
+              style={{ minWidth: 20, padding: '0 2px' }}
+            />
+          </>
+        )}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+        <CopyButton
+          text={() => stripAqbotTags(message.content ?? '')}
+          size={13}
+          timeout={3000}
+        />
+        <Tooltip title={t('chat.regenerate')}>
+          <Button
+            type="text"
+            size="small"
+            icon={<RotateCcw size={13} />}
+            disabled={actionsDisabled || !onRegenerateVersion}
+            data-testid={`multi-model-regenerate-${message.id}`}
+            onClick={() => onRegenerateVersion?.(message)}
+          />
+        </Tooltip>
+        <Tooltip title={t('chat.editMessage')}>
+          <Button
+            type="text"
+            size="small"
+            icon={<Pencil size={13} />}
+            disabled={actionsDisabled || !onEditVersion}
+            data-testid={`multi-model-edit-${message.id}`}
+            onClick={() => onEditVersion?.(message)}
+          />
+        </Tooltip>
+        <ModelSelector
+          onSelect={(providerId, modelId) => onSwitchModelVersion?.(message, providerId, modelId)}
+          overrideCurrentModel={currentModelOverride}
+        >
+          <Tooltip title={t('chat.switchModel')}>
+            <Button
+              type="text"
+              size="small"
+              icon={<ArrowLeftRight size={13} />}
+              disabled={actionsDisabled || !onSwitchModelVersion}
+              data-testid={`multi-model-switch-model-${message.id}`}
+            />
+          </Tooltip>
+        </ModelSelector>
+        <Dropdown
+          disabled={actionsDisabled || !onBranchVersion}
+          menu={{
+            items: [
+              {
+                key: 'independent',
+                label: t('chat.branchIndependent'),
+                onClick: () => onBranchVersion?.(message, false),
+              },
+              {
+                key: 'child',
+                label: t('chat.branchChild'),
+                onClick: () => onBranchVersion?.(message, true),
+              },
+            ],
+          }}
+          trigger={['click']}
+          placement="bottom"
+        >
+          <Tooltip title={t('chat.branchConversation')}>
+            <Button
+              type="text"
+              size="small"
+              icon={<GitBranch size={13} />}
+              disabled={actionsDisabled || !onBranchVersion}
+              data-testid={`multi-model-branch-${message.id}`}
+            />
+          </Tooltip>
+        </Dropdown>
+        {onDeleteVersion && displayVersions.length > 1 && (
+          <Popconfirm
+            title={t('chat.deleteConfirm')}
+            onConfirm={() => onDeleteVersion(message.id)}
+            okText={t('common.confirm')}
+            cancelText={t('common.cancel')}
+          >
+            <Button
+              type="text"
+              size="small"
+              danger
+              disabled={actionsDisabled}
+              icon={<Trash2 size={13} />}
+              data-testid={`multi-model-delete-${message.id}`}
+            />
+          </Popconfirm>
+        )}
+      </div>
     </div>
   );
 }
