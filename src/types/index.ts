@@ -448,6 +448,17 @@ export interface AppSettings {
   webdav_sync_interval_minutes?: number;
   webdav_max_remote_backups?: number;
   webdav_include_documents?: boolean;
+  // S3 sync settings
+  s3_bucket?: string | null;
+  s3_region?: string | null;
+  s3_endpoint?: string | null;
+  s3_prefix?: string | null;
+  s3_force_path_style?: boolean;
+  s3_use_default_credentials?: boolean;
+  s3_sync_enabled?: boolean;
+  s3_sync_interval_minutes?: number;
+  s3_max_remote_backups?: number;
+  s3_include_documents?: boolean;
   last_selected_conversation_id?: string | null;
   /** Custom documents root override (overrides ~/Documents/aqbot/) */
   documents_root_override?: string | null;

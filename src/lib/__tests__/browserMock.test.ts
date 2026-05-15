@@ -44,4 +44,31 @@ describe('browserMock gateway templates', () => {
     const backups = await handleCommand<any[]>('list_backups');
     expect(backups).toHaveLength(0);
   });
+
+  it('stores S3 config and supports S3 backup list/delete commands', async () => {
+    await handleCommand('save_s3_config', {
+      config: {
+        bucket: 'aqbot-backups',
+        region: 'us-west-2',
+        prefix: 'desktop/',
+        endpointUrl: null,
+        forcePathStyle: false,
+        useDefaultCredentials: false,
+        accessKeyId: 'access',
+        secretAccessKey: 'secret',
+        sessionToken: null,
+      },
+    });
+
+    const config = await handleCommand<any>('get_s3_config');
+    expect(config.bucket).toBe('aqbot-backups');
+
+    const fileName = await handleCommand<string>('s3_backup');
+    const backups = await handleCommand<any[]>('s3_list_backups');
+    expect(backups[0].fileName).toBe(fileName);
+
+    await handleCommand('s3_delete_backup', { fileName });
+    const remaining = await handleCommand<any[]>('s3_list_backups');
+    expect(remaining).toHaveLength(0);
+  });
 });

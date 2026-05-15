@@ -11,6 +11,7 @@ import { useTranslation } from 'react-i18next';
 import { useBackupStore } from '@/stores';
 import type { BackupManifest } from '@/types';
 import WebDavSync from './WebDavSync';
+import S3Sync from './S3Sync';
 
 const { Text } = Typography;
 
@@ -35,7 +36,7 @@ export default function BackupCenter() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [form] = Form.useForm();
   const [settingsForm] = Form.useForm();
-  const [activeView, setActiveView] = useState<'local' | 'webdav'>('local');
+  const [activeView, setActiveView] = useState<'local' | 'webdav' | 's3'>('local');
   const effectiveBackupDir = backupSettings?.backupDir || t('backup.defaultDir');
 
   useEffect(() => {
@@ -213,16 +214,19 @@ export default function BackupCenter() {
     <div className="p-6 pb-12">
       <Segmented
         value={activeView}
-        onChange={(v) => setActiveView(v as 'local' | 'webdav')}
+        onChange={(v) => setActiveView(v as 'local' | 'webdav' | 's3')}
         options={[
           { label: t('backup.localBackup'), value: 'local' },
           { label: 'WebDAV', value: 'webdav' },
+          { label: 'S3', value: 's3' },
         ]}
         style={{ marginBottom: 16 }}
       />
 
       {activeView === 'webdav' ? (
         <WebDavSync />
+      ) : activeView === 's3' ? (
+        <S3Sync />
       ) : (
       <>
       {/* Header */}

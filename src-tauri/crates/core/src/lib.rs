@@ -10,6 +10,7 @@ pub mod path_vars;
 pub mod rag;
 pub mod repo;
 pub mod search;
+pub mod s3_backup;
 pub mod storage_inventory;
 pub mod storage_migration;
 pub mod storage_paths;

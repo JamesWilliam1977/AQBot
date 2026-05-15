@@ -17,6 +17,25 @@ export type WebDavFileInfo = {
   hostname: string;
 };
 
+export type S3Config = {
+  bucket: string;
+  region: string;
+  prefix: string;
+  endpointUrl: string | null;
+  forcePathStyle: boolean;
+  useDefaultCredentials: boolean;
+  accessKeyId: string;
+  secretAccessKey: string;
+  sessionToken: string | null;
+};
+
+export type S3FileInfo = {
+  fileName: string;
+  size: number;
+  lastModified: string;
+  hostname: string;
+};
+
 export type BackupManifest = {
   id: string;
   version: string;

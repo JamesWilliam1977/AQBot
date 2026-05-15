@@ -24,6 +24,7 @@ pub struct AppState {
     pub db_path: String,
     pub auto_backup_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     pub webdav_sync_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    pub s3_sync_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     pub vector_store: Arc<aqbot_core::vector_store::VectorStore>,
     pub knowledge_index_scheduler: Arc<knowledge_index_scheduler::KnowledgeIndexScheduler>,
     pub stream_cancel_flags: Arc<Mutex<std::collections::HashMap<String, Arc<AtomicBool>>>>,
@@ -258,6 +259,16 @@ pub fn run() {
             commands::webdav::webdav_delete_backup,
             commands::webdav::get_webdav_sync_status,
             commands::webdav::restart_webdav_sync,
+            // s3
+            commands::s3::get_s3_config,
+            commands::s3::save_s3_config,
+            commands::s3::s3_check_connection,
+            commands::s3::s3_backup,
+            commands::s3::s3_list_backups,
+            commands::s3::s3_restore,
+            commands::s3::s3_delete_backup,
+            commands::s3::get_s3_sync_status,
+            commands::s3::restart_s3_sync,
             // desktop
             commands::desktop::get_desktop_capabilities,
             commands::desktop::send_desktop_notification,
@@ -475,6 +486,7 @@ pub fn run() {
                 db_path: db_path,
                 auto_backup_handle: Arc::new(Mutex::new(None)),
                 webdav_sync_handle: Arc::new(Mutex::new(None)),
+                s3_sync_handle: Arc::new(Mutex::new(None)),
                 vector_store: Arc::new(vector_store),
                 knowledge_index_scheduler: Arc::new(
                     knowledge_index_scheduler::KnowledgeIndexScheduler::default(),
@@ -590,6 +602,45 @@ pub fn run() {
                             };
 
                             let task = commands::webdav::spawn_webdav_sync_task(
+                                db2, master_key, dir2, interval, initial_delay_secs,
+                            );
+                            *handle.lock().await = Some(task);
+                        }
+                    }
+                });
+            }
+
+            // Initialize S3 sync scheduler if enabled
+            {
+                let state = app.state::<AppState>();
+                let db = state.sea_db.clone();
+                let master_key = state.master_key;
+                let app_data_dir = app_dir.clone();
+                let handle = state.s3_sync_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Ok(settings) = aqbot_core::repo::settings::get_settings(&db).await {
+                        if settings.s3_sync_enabled && settings.s3_sync_interval_minutes > 0 {
+                            let db2 = db.clone();
+                            let dir2 = app_data_dir.clone();
+                            let interval = settings.s3_sync_interval_minutes;
+                            let interval_secs = interval as u64 * 60;
+
+                            let initial_delay_secs = match aqbot_core::repo::settings::get_setting(&db, "s3_last_sync_time").await {
+                                Ok(Some(ts)) => {
+                                    if let Ok(last_time) = chrono::DateTime::parse_from_rfc3339(&ts) {
+                                        let elapsed = chrono::Utc::now()
+                                            .signed_duration_since(last_time)
+                                            .num_seconds()
+                                            .max(0) as u64;
+                                        if elapsed >= interval_secs { 0 } else { interval_secs - elapsed }
+                                    } else {
+                                        interval_secs
+                                    }
+                                }
+                                _ => interval_secs,
+                            };
+
+                            let task = commands::s3::spawn_s3_sync_task(
                                 db2, master_key, dir2, interval, initial_delay_secs,
                             );
                             *handle.lock().await = Some(task);

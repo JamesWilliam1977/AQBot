@@ -4568,6 +4568,7 @@ mod tests {
             db_path: "sqlite::memory:".to_string(),
             auto_backup_handle: Arc::new(Mutex::new(None)),
             webdav_sync_handle: Arc::new(Mutex::new(None)),
+            s3_sync_handle: Arc::new(Mutex::new(None)),
             vector_store,
             knowledge_index_scheduler: Arc::new(
                 crate::knowledge_index_scheduler::KnowledgeIndexScheduler::default(),

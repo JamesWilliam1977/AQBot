@@ -6,7 +6,8 @@ use aqbot_core::repo::drawing::{
 use aqbot_core::repo::stored_file::StoredFile;
 use aqbot_core::types::{ProviderConfig, ProviderProxyConfig, ProviderType};
 use aqbot_providers::openai_images::{
-    ImageEditImageFormat, ImageEditRequest, ImageEditTransferMode, ImageGenerateRequest, ImageUpload, OpenAIImagesClient,
+    ImageEditImageFormat, ImageEditRequest, ImageEditTransferMode, ImageGenerateRequest,
+    ImageUpload, OpenAIImagesClient,
 };
 use aqbot_providers::{resolve_base_url_for_type, ProviderRequestContext};
 use base64::Engine;
@@ -235,8 +236,16 @@ pub async fn generate_drawing_images(
     )
     .await?;
 
-    let generation_path = if input.generation_api_path.is_empty() { None } else { Some(input.generation_api_path.as_str()) };
-    let edit_path = if input.edit_api_path.is_empty() { None } else { Some(input.edit_api_path.as_str()) };
+    let generation_path = if input.generation_api_path.is_empty() {
+        None
+    } else {
+        Some(input.generation_api_path.as_str())
+    };
+    let edit_path = if input.edit_api_path.is_empty() {
+        None
+    } else {
+        Some(input.edit_api_path.as_str())
+    };
 
     let result = if input.reference_file_ids.is_empty() {
         OpenAIImagesClient::new()
@@ -316,7 +325,11 @@ pub async fn edit_drawing_image(
         None,
     )
     .await?;
-    let edit_path = if input.edit_api_path.is_empty() { None } else { Some(input.edit_api_path.as_str()) };
+    let edit_path = if input.edit_api_path.is_empty() {
+        None
+    } else {
+        Some(input.edit_api_path.as_str())
+    };
     let mut uploads = vec![load_drawing_image_upload(&state, &source).await?];
     uploads.extend(load_reference_uploads(&state, &input.reference_file_ids).await?);
     let result = OpenAIImagesClient::new()
@@ -387,7 +400,11 @@ pub async fn edit_drawing_image_with_mask(
         Some(input.mask_file_id.clone()),
     )
     .await?;
-    let edit_path = if input.edit_api_path.is_empty() { None } else { Some(input.edit_api_path.as_str()) };
+    let edit_path = if input.edit_api_path.is_empty() {
+        None
+    } else {
+        Some(input.edit_api_path.as_str())
+    };
     let mut uploads = vec![load_drawing_image_upload(&state, &source).await?];
     uploads.extend(load_reference_uploads(&state, &input.reference_file_ids).await?);
     let mask = Some(load_stored_file_upload(&state, &mask_file).await?);

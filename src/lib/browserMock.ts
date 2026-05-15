@@ -402,6 +402,16 @@ const DEFAULT_SETTINGS = {
   inherit_conversation_preferences_on_create: true,
   chat_stream_first_packet_timeout_secs: 180,
   chat_stream_idle_timeout_secs: 90,
+  s3_bucket: null,
+  s3_region: 'us-east-1',
+  s3_endpoint: null,
+  s3_prefix: 'aqbot/',
+  s3_force_path_style: false,
+  s3_use_default_credentials: false,
+  s3_sync_enabled: false,
+  s3_sync_interval_minutes: 60,
+  s3_max_remote_backups: 10,
+  s3_include_documents: false,
 };
 
 function svgDataUrl(label: string, color = '#f97316'): string {
@@ -1238,6 +1248,58 @@ export async function handleCommand<T>(cmd: string, args?: Record<string, unknow
     case 'get_backup_settings':
       return { enabled: false, intervalHours: 24, maxCount: 10, backupDir: '/mock/backups' } as T;
     case 'update_backup_settings':
+      return undefined as T;
+    case 'get_s3_config':
+      return getStore('s3_config', {
+        bucket: '',
+        region: 'us-east-1',
+        prefix: 'aqbot/',
+        endpointUrl: null,
+        forcePathStyle: false,
+        useDefaultCredentials: false,
+        accessKeyId: '',
+        secretAccessKey: '',
+        sessionToken: null,
+      }) as T;
+    case 'save_s3_config': {
+      const config = (args as any)?.config;
+      setStore('s3_config', config);
+      return undefined as T;
+    }
+    case 's3_check_connection':
+      return true as T;
+    case 's3_backup': {
+      const backups = getStore<any[]>('s3_backups', []);
+      const fileName = `aqbot-backup-${new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)}.mock.zip`;
+      backups.unshift({
+        fileName,
+        size: 2048,
+        lastModified: new Date().toISOString(),
+        hostname: 'mock',
+      });
+      setStore('s3_backups', backups);
+      setStore('s3_sync_status', {
+        lastSyncTime: new Date().toISOString(),
+        lastSyncStatus: 'success',
+      });
+      return fileName as T;
+    }
+    case 's3_list_backups':
+      return getStore('s3_backups', []) as T;
+    case 's3_restore':
+      return undefined as T;
+    case 's3_delete_backup': {
+      const fileName = (args as any)?.fileName;
+      const backups = getStore<any[]>('s3_backups', []);
+      setStore('s3_backups', backups.filter((b: any) => b.fileName !== fileName));
+      return undefined as T;
+    }
+    case 'get_s3_sync_status':
+      return getStore('s3_sync_status', {
+        lastSyncTime: null,
+        lastSyncStatus: null,
+      }) as T;
+    case 'restart_s3_sync':
       return undefined as T;
 
     // ── Drawing ───────────────────────────────────────────────────────

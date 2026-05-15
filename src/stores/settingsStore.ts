@@ -102,6 +102,17 @@ const DEFAULT_SETTINGS: AppSettings = {
   webdav_sync_interval_minutes: 60,
   webdav_max_remote_backups: 10,
   webdav_include_documents: false,
+  // S3 sync settings — must be present so stale saves never omit them
+  s3_bucket: null,
+  s3_region: 'us-east-1',
+  s3_endpoint: null,
+  s3_prefix: 'aqbot/',
+  s3_force_path_style: false,
+  s3_use_default_credentials: false,
+  s3_sync_enabled: false,
+  s3_sync_interval_minutes: 60,
+  s3_max_remote_backups: 10,
+  s3_include_documents: false,
 };
 
 export interface GlobalShortcutDiagnostic {
