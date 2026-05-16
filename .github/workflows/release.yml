@@ -19,7 +19,7 @@ jobs:
   # ── Validate tag matches package.json version ──────────
   check-version:
     name: Check Version
-    if: ${{ !endsWith(github.ref_name, '-test') }}
+    if: ${{ !contains(github.ref_name, '-test') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,7 +38,7 @@ jobs:
   draft-release-notes:
     name: Generate Release Notes
     needs: [check-version]
-    if: ${{ !endsWith(github.ref_name, '-test') }}
+    if: ${{ !contains(github.ref_name, '-test') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -74,7 +74,7 @@ jobs:
   release:
     name: Build (${{ matrix.target }})
     needs: [check-version, draft-release-notes]
-    if: ${{ !endsWith(github.ref_name, '-test') }}
+    if: ${{ !contains(github.ref_name, '-test') }}
     strategy:
       fail-fast: false
       matrix:
@@ -218,7 +218,7 @@ jobs:
   release-linux-arm:
     name: Build (aarch64-unknown-linux-gnu)
     needs: [check-version, draft-release-notes]
-    if: ${{ !endsWith(github.ref_name, '-test') }}
+    if: ${{ !contains(github.ref_name, '-test') }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -341,7 +341,7 @@ jobs:
   publish-release:
     name: Publish Release
     needs: [release, release-linux-arm]
-    if: ${{ !endsWith(github.ref_name, '-test') }}
+    if: ${{ !contains(github.ref_name, '-test') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -359,7 +359,7 @@ jobs:
   deploy-website:
     name: Deploy Website
     needs: [publish-release]
-    if: ${{ !endsWith(github.ref_name, '-test') }}
+    if: ${{ !contains(github.ref_name, '-test') }}
     runs-on: ubuntu-latest
     steps:
       - name: Trigger website deployment
