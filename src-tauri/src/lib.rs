@@ -40,8 +40,11 @@ pub struct AppState {
 
 mod commands;
 mod context_manager;
+mod diagnostics;
 mod indexing;
 pub mod knowledge_index_scheduler;
+#[cfg(any(target_os = "linux", test))]
+mod linux_webkit;
 mod paths;
 mod tray;
 mod window_lifecycle;
@@ -53,12 +56,11 @@ mod windows_utils;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+    diagnostics::init_tracing();
+    diagnostics::log_process_startup();
+
+    #[cfg(target_os = "linux")]
+    linux_webkit::apply_startup_workarounds();
 
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
@@ -280,6 +282,7 @@ pub fn run() {
             commands::desktop::apply_startup_settings,
             commands::desktop::test_proxy,
             commands::desktop::open_devtools,
+            commands::desktop::write_diagnostic_log,
             commands::desktop::list_system_fonts,
             commands::desktop::minimize_window,
             commands::desktop::toggle_maximize_window,
@@ -360,12 +363,19 @@ pub fn run() {
             // %USERPROFILE%\.aqbot\ on Windows).
             let app_dir = paths::aqbot_home();
             std::fs::create_dir_all(&app_dir).expect("failed to create AQBot home dir");
+            tracing::info!(
+                app_dir = %app_dir.display(),
+                version = %app.package_info().version,
+                "AQBot setup started"
+            );
 
             // Ensure ~/Documents/aqbot/{images,files,backups}/ exist
             aqbot_core::storage_paths::ensure_documents_dirs()
                 .expect("failed to create documents storage dirs");
+            tracing::info!("AQBot documents directories ensured");
 
             let db_path = format!("sqlite:{}/aqbot.db", app_dir.display());
+            tracing::info!(db_path = %db_path, "AQBot database path resolved");
 
             // Load or generate master key BEFORE opening the database.
             // db::create_pool uses SQLite create mode, which would create aqbot.db
@@ -384,6 +394,7 @@ pub fn run() {
                 key.copy_from_slice(&bytes);
                 // Securely clear the temporary buffer
                 bytes.iter_mut().for_each(|b| *b = 0);
+                tracing::info!("AQBot master key loaded");
                 key
             } else {
                 // Safety guard: refuse to generate a new key when an existing database is
@@ -414,6 +425,7 @@ pub fn run() {
                     std::fs::set_permissions(&key_path, perms)
                         .expect("failed to set master.key permissions");
                 }
+                tracing::info!("AQBot master key generated");
                 key
             };
 
@@ -449,6 +461,7 @@ pub fn run() {
                     std::process::exit(1);
                 }
             };
+            tracing::info!("AQBot database pool initialized");
 
             // Initialize vector store (shares the sea-orm SQLite connection)
             let vector_store =
@@ -505,7 +518,11 @@ pub fn run() {
             }
 
             if let Some(main_window) = app.get_webview_window("main") {
+                tracing::info!("AQBot main window found during setup");
                 window_lifecycle::configure_main_window(app.handle(), &main_window);
+                tracing::info!("AQBot main window configured");
+            } else {
+                tracing::warn!("AQBot main window was not found during setup");
             }
 
             // Initialize auto-backup scheduler if enabled

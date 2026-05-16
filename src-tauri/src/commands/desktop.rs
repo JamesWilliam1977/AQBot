@@ -101,6 +101,32 @@ pub async fn open_devtools(webview_window: tauri::WebviewWindow) -> Result<(), S
 }
 
 #[tauri::command]
+pub async fn write_diagnostic_log(level: String, message: String) -> Result<(), String> {
+    let message = truncate_diagnostic_message(&message);
+    match level.trim().to_ascii_lowercase().as_str() {
+        "trace" => tracing::trace!(target: "aqbot_frontend", "{}", message),
+        "debug" => tracing::debug!(target: "aqbot_frontend", "{}", message),
+        "warn" | "warning" => tracing::warn!(target: "aqbot_frontend", "{}", message),
+        "error" => tracing::error!(target: "aqbot_frontend", "{}", message),
+        _ => tracing::info!(target: "aqbot_frontend", "{}", message),
+    }
+    Ok(())
+}
+
+fn truncate_diagnostic_message(message: &str) -> String {
+    const MAX_DIAGNOSTIC_MESSAGE_LEN: usize = 8 * 1024;
+    let mut result = String::with_capacity(message.len().min(MAX_DIAGNOSTIC_MESSAGE_LEN));
+    for ch in message.chars() {
+        if result.len() + ch.len_utf8() > MAX_DIAGNOSTIC_MESSAGE_LEN {
+            result.push_str("...<truncated>");
+            break;
+        }
+        result.push(ch);
+    }
+    result
+}
+
+#[tauri::command]
 pub async fn test_proxy(
     proxy_type: String,
     proxy_address: String,
