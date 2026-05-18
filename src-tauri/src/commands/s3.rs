@@ -16,12 +16,12 @@ const S3_LAST_SYNC_TIME_SETTING: &str = "s3_last_sync_time";
 const S3_LAST_SYNC_STATUS_SETTING: &str = "s3_last_sync_status";
 
 #[derive(Default)]
-struct RestoreCleanup {
+struct TempPathCleanup {
     files: Vec<PathBuf>,
     dirs: Vec<PathBuf>,
 }
 
-impl RestoreCleanup {
+impl TempPathCleanup {
     fn track_file<P: Into<PathBuf>>(&mut self, path: P) {
         self.files.push(path.into());
     }
@@ -31,7 +31,7 @@ impl RestoreCleanup {
     }
 }
 
-impl Drop for RestoreCleanup {
+impl Drop for TempPathCleanup {
     fn drop(&mut self) {
         for path in &self.files {
             let _ = std::fs::remove_file(path);
@@ -92,7 +92,7 @@ pub async fn s3_restore(
     let backup_dir = backup::resolve_backup_dir(decoded_backup_dir.as_deref(), &state.app_data_dir);
     backup::ensure_backup_dir(&backup_dir).map_err(|e| e.to_string())?;
 
-    let mut cleanup = RestoreCleanup::default();
+    let mut cleanup = TempPathCleanup::default();
 
     let zip_path = backup_dir.join(&file_name);
     cleanup.track_file(&zip_path);
@@ -382,6 +382,8 @@ async fn do_s3_backup_once(
         .as_millis();
     let temp_db_path = backup_dir.join(format!("_s3_temp_{}.db", temp_id));
     let _ = std::fs::remove_file(&temp_db_path);
+    let mut cleanup = TempPathCleanup::default();
+    cleanup.track_file(&temp_db_path);
 
     let db_str = temp_db_path.to_string_lossy().to_string();
     db.execute(Statement::from_string(
@@ -404,6 +406,7 @@ async fn do_s3_backup_once(
     let master_key_path = app_data_dir.join("master.key");
     let zip_filename = webdav::generate_backup_filename();
     let zip_path = backup_dir.join(&zip_filename);
+    cleanup.track_file(&zip_path);
     webdav::create_backup_zip(
         &temp_db_path,
         documents_dir.as_deref(),
@@ -624,13 +627,42 @@ mod tests {
         std::fs::write(&safety_key, b"secret").expect("write safety key");
 
         {
-            let mut cleanup = RestoreCleanup::default();
+            let mut cleanup = TempPathCleanup::default();
             cleanup.track_file(&safety_key);
         }
 
         assert!(
             !safety_key.exists(),
             "restore cleanup must delete the plaintext safety key backup"
+        );
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
+
+    #[test]
+    fn temp_path_cleanup_removes_backup_temp_files_on_drop() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "aqbot-s3-backup-cleanup-{}",
+            aqbot_core::utils::gen_id()
+        ));
+        std::fs::create_dir_all(&temp_root).expect("create temp root");
+        let temp_db = temp_root.join("_s3_temp_123.db");
+        let temp_zip = temp_root.join("aqbot-backup-20260519_010203.host.zip");
+        std::fs::write(&temp_db, b"db").expect("write temp db");
+        std::fs::write(&temp_zip, b"zip").expect("write temp zip");
+
+        {
+            let mut cleanup = TempPathCleanup::default();
+            cleanup.track_file(&temp_db);
+            cleanup.track_file(&temp_zip);
+        }
+
+        assert!(
+            !temp_db.exists(),
+            "backup cleanup must delete the temporary database copy"
+        );
+        assert!(
+            !temp_zip.exists(),
+            "backup cleanup must delete the generated temporary ZIP"
         );
         let _ = std::fs::remove_dir_all(&temp_root);
     }

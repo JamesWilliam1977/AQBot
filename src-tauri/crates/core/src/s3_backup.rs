@@ -1,13 +1,25 @@
 use aws_config::BehaviorVersion;
 use aws_credential_types::{provider::SharedCredentialsProvider, Credentials};
+use aws_sdk_s3::config::retry::RetryConfig;
+use aws_sdk_s3::config::timeout::TimeoutConfig;
 use aws_sdk_s3::config::Region;
+use aws_sdk_s3::error::{ProvideErrorMetadata, SdkError};
 use aws_sdk_s3::primitives::{ByteStream, DateTime, DateTimeFormat};
 use aws_sdk_s3::Client;
 use serde::{Deserialize, Serialize};
+use std::error::Error as StdError;
+use std::fmt::Debug;
 use std::path::Path;
+use std::time::Duration;
 
 use crate::error::{AQBotError, Result};
 use crate::webdav::parse_hostname_from_filename;
+
+const S3_CONNECT_TIMEOUT_SECS: u64 = 10;
+const S3_READ_TIMEOUT_SECS: u64 = 30;
+const S3_OPERATION_ATTEMPT_TIMEOUT_SECS: u64 = 300;
+const S3_OPERATION_TIMEOUT_SECS: u64 = 900;
+const S3_MAX_ATTEMPTS: u32 = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -63,7 +75,9 @@ impl S3BackupClient {
 
         let shared_config = loader.load().await;
         let mut s3_config = aws_sdk_s3::config::Builder::from(&shared_config)
-            .force_path_style(config.force_path_style);
+            .force_path_style(config.force_path_style)
+            .timeout_config(s3_timeout_config())
+            .retry_config(s3_retry_config());
 
         if let Some(endpoint) = normalized_endpoint(&config) {
             s3_config = s3_config.endpoint_url(endpoint);
@@ -81,7 +95,7 @@ impl S3BackupClient {
             .bucket(bucket_name(&self.config))
             .send()
             .await
-            .map_err(|e| AQBotError::Gateway(format!("S3 connection failed: {}", e)))?;
+            .map_err(|e| AQBotError::Gateway(format_s3_sdk_error("connection", &e)))?;
         Ok(true)
     }
 
@@ -104,7 +118,7 @@ impl S3BackupClient {
             let response = request
                 .send()
                 .await
-                .map_err(|e| AQBotError::Gateway(format!("S3 list backups failed: {}", e)))?;
+                .map_err(|e| AQBotError::Gateway(format_s3_sdk_error("list backups", &e)))?;
 
             for object in response.contents() {
                 let Some(key) = object.key() else {
@@ -150,7 +164,7 @@ impl S3BackupClient {
             .body(body)
             .send()
             .await
-            .map_err(|e| AQBotError::Gateway(format!("S3 upload failed: {}", e)))?;
+            .map_err(|e| AQBotError::Gateway(format_s3_sdk_error("upload", &e)))?;
         Ok(())
     }
 
@@ -162,7 +176,7 @@ impl S3BackupClient {
             .key(object_key(&self.config.prefix, filename))
             .send()
             .await
-            .map_err(|e| AQBotError::Gateway(format!("S3 download failed: {}", e)))?;
+            .map_err(|e| AQBotError::Gateway(format_s3_sdk_error("download", &e)))?;
         let data = response
             .body
             .collect()
@@ -181,9 +195,99 @@ impl S3BackupClient {
             .key(object_key(&self.config.prefix, filename))
             .send()
             .await
-            .map_err(|e| AQBotError::Gateway(format!("S3 delete failed: {}", e)))?;
+            .map_err(|e| AQBotError::Gateway(format_s3_sdk_error("delete", &e)))?;
         Ok(())
     }
+}
+
+fn s3_timeout_config() -> TimeoutConfig {
+    TimeoutConfig::builder()
+        .connect_timeout(Duration::from_secs(S3_CONNECT_TIMEOUT_SECS))
+        .read_timeout(Duration::from_secs(S3_READ_TIMEOUT_SECS))
+        .operation_attempt_timeout(Duration::from_secs(S3_OPERATION_ATTEMPT_TIMEOUT_SECS))
+        .operation_timeout(Duration::from_secs(S3_OPERATION_TIMEOUT_SECS))
+        .build()
+}
+
+fn s3_retry_config() -> RetryConfig {
+    RetryConfig::standard().with_max_attempts(S3_MAX_ATTEMPTS)
+}
+
+fn format_s3_sdk_error<E, R>(action: &str, err: &SdkError<E, R>) -> String
+where
+    E: ProvideErrorMetadata + StdError + 'static,
+    R: Debug,
+{
+    let prefix = format!("S3 {} failed", action);
+    match err {
+        SdkError::TimeoutError(_) => {
+            format!(
+                "{}: request timed out. Details: {}",
+                prefix,
+                sdk_error_chain(err)
+            )
+        }
+        SdkError::DispatchFailure(dispatch) => {
+            let kind = if dispatch.is_timeout() {
+                "timeout"
+            } else if dispatch.is_io() {
+                "I/O"
+            } else if dispatch.is_user() {
+                "request"
+            } else {
+                "transport"
+            };
+            let details = dispatch
+                .as_connector_error()
+                .map(|source| error_chain(source))
+                .unwrap_or_else(|| sdk_error_chain(err));
+            format!(
+                "{}: network request failed ({}). Check S3 endpoint, proxy, DNS, and network connectivity. Details: {}",
+                prefix, kind, details
+            )
+        }
+        SdkError::ServiceError(_) => {
+            let details = err
+                .as_service_error()
+                .and_then(service_error_details)
+                .unwrap_or_else(|| sdk_error_chain(err));
+            format!("{}: {}", prefix, details)
+        }
+        _ => format!("{}: {}", prefix, sdk_error_chain(err)),
+    }
+}
+
+fn service_error_details(error: &(impl ProvideErrorMetadata + StdError)) -> Option<String> {
+    match (error.code(), error.message()) {
+        (Some(code), Some(message)) if !message.trim().is_empty() => {
+            Some(format!("{}: {}", code, message))
+        }
+        (Some(code), _) => Some(code.to_string()),
+        (_, Some(message)) if !message.trim().is_empty() => Some(message.to_string()),
+        _ => {
+            let fallback = error.to_string();
+            (!fallback.trim().is_empty()).then_some(fallback)
+        }
+    }
+}
+
+fn sdk_error_chain<E, R>(err: &SdkError<E, R>) -> String
+where
+    E: StdError + 'static,
+    R: Debug,
+{
+    StdError::source(err)
+        .map(error_chain)
+        .unwrap_or_else(|| err.to_string())
+}
+
+fn error_chain(mut error: &(dyn StdError + 'static)) -> String {
+    let mut parts = vec![error.to_string()];
+    while let Some(source) = error.source() {
+        parts.push(source.to_string());
+        error = source;
+    }
+    parts.join(": ")
 }
 
 fn validate_config(config: &S3Config) -> Result<()> {
@@ -306,6 +410,72 @@ mod tests {
         assert_eq!(files[1].file_name, "aqbot-backup-20260514_010203.alpha.zip");
     }
 
+    #[test]
+    fn s3_client_uses_bounded_timeouts_and_extra_retries() {
+        let timeout = s3_timeout_config();
+        assert_eq!(
+            timeout.connect_timeout(),
+            Some(std::time::Duration::from_secs(S3_CONNECT_TIMEOUT_SECS))
+        );
+        assert_eq!(
+            timeout.read_timeout(),
+            Some(std::time::Duration::from_secs(S3_READ_TIMEOUT_SECS))
+        );
+        assert_eq!(
+            timeout.operation_attempt_timeout(),
+            Some(std::time::Duration::from_secs(
+                S3_OPERATION_ATTEMPT_TIMEOUT_SECS
+            ))
+        );
+        assert_eq!(
+            timeout.operation_timeout(),
+            Some(std::time::Duration::from_secs(S3_OPERATION_TIMEOUT_SECS))
+        );
+        assert_eq!(s3_retry_config().max_attempts(), S3_MAX_ATTEMPTS);
+    }
+
+    #[test]
+    fn s3_dispatch_errors_are_actionable_for_users() {
+        let err = aws_sdk_s3::error::SdkError::<TestServiceError, ()>::dispatch_failure(
+            aws_sdk_s3::error::ConnectorError::io(Box::new(std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                "connection reset by peer",
+            ))),
+        );
+
+        let message = format_s3_sdk_error("upload", &err);
+
+        assert!(message.contains("S3 upload failed: network request failed"));
+        assert!(message.contains("endpoint"));
+        assert!(message.contains("connection reset by peer"));
+        assert_ne!(message, "S3 upload failed: dispatch failure");
+    }
+
+    #[test]
+    fn s3_timeout_errors_are_actionable_for_users() {
+        let err = aws_sdk_s3::error::SdkError::<TestServiceError, ()>::timeout_error(
+            std::io::Error::new(std::io::ErrorKind::TimedOut, "deadline elapsed"),
+        );
+
+        let message = format_s3_sdk_error("upload", &err);
+
+        assert!(message.contains("S3 upload failed: request timed out"));
+        assert!(message.contains("deadline elapsed"));
+    }
+
+    #[test]
+    fn s3_service_errors_keep_service_details() {
+        let err = aws_sdk_s3::error::SdkError::service_error(
+            TestServiceError::new("AccessDenied", "access denied by policy"),
+            (),
+        );
+
+        let message = format_s3_sdk_error("upload", &err);
+
+        assert!(message.contains("S3 upload failed: AccessDenied"));
+        assert!(message.contains("access denied by policy"));
+    }
+
     #[tokio::test]
     async fn explicit_credentials_require_access_key_and_secret() {
         let config = S3Config {
@@ -336,5 +506,35 @@ mod tests {
         };
 
         assert!(err.contains("S3 bucket is required"));
+    }
+
+    #[derive(Debug)]
+    struct TestServiceError {
+        meta: aws_sdk_s3::error::ErrorMetadata,
+    }
+
+    impl TestServiceError {
+        fn new(code: &str, message: &str) -> Self {
+            Self {
+                meta: aws_sdk_s3::error::ErrorMetadata::builder()
+                    .code(code)
+                    .message(message)
+                    .build(),
+            }
+        }
+    }
+
+    impl std::fmt::Display for TestServiceError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "test service error")
+        }
+    }
+
+    impl std::error::Error for TestServiceError {}
+
+    impl aws_sdk_s3::error::ProvideErrorMetadata for TestServiceError {
+        fn meta(&self) -> &aws_sdk_s3::error::ErrorMetadata {
+            &self.meta
+        }
     }
 }
