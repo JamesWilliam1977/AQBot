@@ -1,8 +1,10 @@
 import { useState } from 'react';
-import { theme } from 'antd';
+import { Alert, theme } from 'antd';
+import { SyncOutlined } from '@ant-design/icons';
 import { Search, ChevronDown, ChevronRight, ExternalLink, AlertCircle } from 'lucide-react';
 import type { NodeComponentProps } from 'markstream-react';
 import { useTranslation } from 'react-i18next';
+import Think from '@ant-design/x/es/think';
 
 interface SearchResult {
   title: string;
@@ -12,6 +14,13 @@ interface SearchResult {
 
 type WebSearchNodeData = {
   type: 'web-search';
+  content?: string;
+  attrs?: Record<string, string> | [string, string][];
+  loading?: boolean;
+};
+
+type WebSearchQueryNodeData = {
+  type: 'web-search-query';
   content?: string;
   attrs?: Record<string, string> | [string, string][];
   loading?: boolean;
@@ -29,6 +38,15 @@ function getAttrValue(
   return attrs[key];
 }
 
+function decodeAttrValue(value: string): string {
+  return value
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+}
+
 function getFavicon(url: string) {
   try {
     const u = new URL(url);
@@ -38,6 +56,90 @@ function getFavicon(url: string) {
   }
 }
 
+function SearchQuerySummaryPanel({
+  status,
+  query,
+  error,
+}: {
+  status: string;
+  query?: string;
+  error?: string;
+}) {
+  const { token } = theme.useToken();
+  const { t } = useTranslation();
+  const isLoading = status === 'summarizing';
+  const isError = status === 'error';
+  const [expanded, setExpanded] = useState(isError);
+  const title = isLoading
+    ? t('chat.search.summarizingQuery')
+    : isError
+      ? t('chat.search.querySummaryFailed')
+      : t('chat.search.querySummary');
+  const hasBody = Boolean(error || query);
+
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <Think
+        title={(
+          <span
+            data-aqbot-search-query-status={status}
+            style={{ color: isError ? token.colorError : undefined }}
+          >
+            {title}
+          </span>
+        )}
+        blink={isLoading}
+        loading={isLoading ? (
+          <SyncOutlined style={{ fontSize: 12, animation: 'aqbot-think-spin 1s linear infinite' }} />
+        ) : false}
+        icon={isError ? <AlertCircle size={14} /> : <Search size={14} />}
+        expanded={expanded}
+        onExpand={(next) => {
+          if (hasBody) setExpanded(next);
+        }}
+      >
+        {isError && error && (
+          <Alert
+            type="error"
+            showIcon
+            message={error}
+            style={{ marginBottom: query ? 8 : 0 }}
+          />
+        )}
+        {query && (
+          <div
+            style={{
+              color: token.colorText,
+              fontSize: 13,
+              lineHeight: 1.6,
+              wordBreak: 'break-word',
+            }}
+          >
+            {query}
+          </div>
+        )}
+      </Think>
+    </div>
+  );
+}
+
+export function WebSearchQueryNode(props: NodeComponentProps<WebSearchQueryNodeData>) {
+  const { node } = props;
+
+  const status = getAttrValue(node.attrs, 'status') ?? (node.loading ? 'summarizing' : 'done');
+  const queryAttr = getAttrValue(node.attrs, 'query');
+  const query = queryAttr ? decodeAttrValue(queryAttr).trim() : '';
+  const error = node.content ? decodeAttrValue(node.content).trim() : '';
+
+  return (
+    <SearchQuerySummaryPanel
+      status={status}
+      query={query}
+      error={error}
+    />
+  );
+}
+
 export function WebSearchNode(props: NodeComponentProps<WebSearchNodeData>) {
   const { node } = props;
   const { token } = theme.useToken();
@@ -45,6 +147,11 @@ export function WebSearchNode(props: NodeComponentProps<WebSearchNodeData>) {
   const [expanded, setExpanded] = useState(false);
 
   const status = getAttrValue(node.attrs, 'status') ?? (node.loading ? 'searching' : 'done');
+  const searchQuery = getAttrValue(node.attrs, 'query');
+  const displayQuery = searchQuery ? decodeAttrValue(searchQuery).trim() : '';
+  const queryStatus = getAttrValue(node.attrs, 'query-status');
+  const queryErrorAttr = getAttrValue(node.attrs, 'query-error');
+  const queryError = queryErrorAttr ? decodeAttrValue(queryErrorAttr).trim() : '';
 
   // Parse results from node content
   let results: SearchResult[] = [];
@@ -57,67 +164,101 @@ export function WebSearchNode(props: NodeComponentProps<WebSearchNodeData>) {
     }
   }
 
-  // Searching state
-  if (status === 'searching') {
+  const shouldShowQuerySummary = status === 'summarizing' || !!queryStatus || !!displayQuery;
+  const querySummary = shouldShowQuerySummary
+    ? (
+        <SearchQuerySummaryPanel
+          status={status === 'summarizing' ? 'summarizing' : queryStatus ?? 'done'}
+          query={displayQuery}
+          error={queryError}
+        />
+      )
+    : null;
+
+  // Summarizing/searching states
+  if (status === 'summarizing' || status === 'searching') {
+    if (status === 'summarizing') {
+      return querySummary;
+    }
     return (
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          padding: '8px 12px',
-          marginBottom: 8,
-          borderRadius: 8,
-          backgroundColor: token.colorFillQuaternary,
-        }}
-      >
-        <span
-          className="animate-spin"
-          style={{ display: 'inline-flex', width: 16, height: 16 }}
+      <>
+        {querySummary}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '8px 12px',
+            marginBottom: 8,
+            borderRadius: 8,
+            backgroundColor: token.colorFillQuaternary,
+          }}
         >
-          <Search size={16} style={{ color: token.colorPrimary }} />
-        </span>
-        <span style={{ color: token.colorTextSecondary, fontSize: 13 }}>
-          {t('chat.search.searching')}
-        </span>
-      </div>
+          <span
+            className="animate-spin"
+            style={{ display: 'inline-flex', width: 16, height: 16 }}
+          >
+            <Search size={16} style={{ color: token.colorPrimary }} />
+          </span>
+          <span style={{ color: token.colorTextSecondary, fontSize: 13 }}>
+            {t('chat.search.searching')}
+          </span>
+        </div>
+      </>
     );
   }
 
   // Error state
   if (status === 'error') {
     return (
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          padding: '8px 12px',
-          marginBottom: 8,
-          borderRadius: 8,
-          backgroundColor: token.colorErrorBg,
-          color: token.colorError,
-          fontSize: 13,
-        }}
-      >
-        <AlertCircle size={16} />
-        <span>{node.content || t('chat.search.error')}</span>
-      </div>
+      <>
+        {querySummary}
+        <Alert
+          type="error"
+          showIcon
+          message={node.content || t('chat.search.error')}
+          style={{ marginBottom: 8 }}
+        />
+      </>
     );
   }
 
-  // Done state — show results
-  if (results.length === 0) return null;
+  // Done state — show an explicit empty state instead of silently disappearing.
+  if (results.length === 0) {
+    return (
+      <>
+        {querySummary}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '8px 12px',
+            marginBottom: 8,
+            borderRadius: 8,
+            backgroundColor: token.colorFillQuaternary,
+            color: token.colorTextSecondary,
+            fontSize: 13,
+          }}
+        >
+          <Search size={16} style={{ color: token.colorTextTertiary }} />
+          <span style={{ flex: 1 }}>{t('chat.search.noResults', '未找到相关搜索结果')}</span>
+        </div>
+      </>
+    );
+  }
 
   return (
-    <div
-      style={{
-        marginBottom: 8,
-        borderRadius: 8,
-        border: `1px solid ${token.colorBorderSecondary}`,
-        overflow: 'hidden',
-      }}
-    >
+    <>
+      {querySummary}
+      <div
+        style={{
+          marginBottom: 8,
+          borderRadius: 8,
+          border: `1px solid ${token.colorBorderSecondary}`,
+          overflow: 'hidden',
+        }}
+      >
       {/* Header */}
       <div
         onClick={() => setExpanded(!expanded)}
@@ -245,6 +386,7 @@ export function WebSearchNode(props: NodeComponentProps<WebSearchNodeData>) {
           ))}
         </div>
       )}
-    </div>
+      </div>
+    </>
   );
 }

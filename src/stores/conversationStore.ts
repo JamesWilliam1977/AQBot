@@ -10,7 +10,7 @@ import {
   mergeAssistantVersionsAfterSwitch,
   selectNextAssistantVersion,
 } from '@/lib/chatMultiModel';
-import { formatSearchContent, buildSearchTag } from '@/lib/searchUtils';
+import { buildContextualSearchQuery, formatSearchContent, buildSearchQueryTag, buildSearchTag } from '@/lib/searchUtils';
 import { buildKnowledgeTag, buildMemoryTag, type RagContextRetrievedEvent } from '@/lib/memoryUtils';
 import { useProviderStore } from '@/stores/providerStore';
 import { useSearchStore } from '@/stores/searchStore';
@@ -278,7 +278,8 @@ function getEffectiveThinkingLevel(get: () => ConversationState, conversationId:
 }
 
 const RAG_DISPLAY_TAGS = new Set(['knowledge-retrieval', 'memory-retrieval']);
-const AQBOT_DISPLAY_TAGS = ['knowledge-retrieval', 'memory-retrieval', 'web-search'];
+const SEARCH_DISPLAY_TAGS = new Set(['web-search-query', 'web-search']);
+const AQBOT_DISPLAY_TAGS = ['knowledge-retrieval', 'memory-retrieval', 'web-search-query', 'web-search'];
 
 function readLeadingAqbotDisplayTag(content: string): { tag: string; raw: string } | null {
   const leadingWhitespace = content.match(/^\s*/)?.[0] ?? '';
@@ -346,6 +347,15 @@ function stripLeadingRagDisplayTags(content: string): string {
   }
 
   return keptPrefix + remaining;
+}
+
+function replaceLeadingSearchDisplayTags(content: string, searchDisplayTag: string): string {
+  const { tags, body } = readLeadingAqbotDisplayTags(content);
+  const keptPrefix = tags
+    .filter(({ tag }) => !SEARCH_DISPLAY_TAGS.has(tag))
+    .map(({ raw }) => raw)
+    .join('');
+  return `${searchDisplayTag}${keptPrefix}${body}`;
 }
 
 function mergeDbRagDisplayPrefix(dbContent: string, localContent: string): string {
@@ -749,6 +759,7 @@ interface ConversationState {
   activeConversationId: string | null;
   messages: Message[];
   ragDisplayByMessageId: Record<string, string>;
+  searchDisplayByMessageId: Record<string, string>;
   loading: boolean;
   loadingOlder: boolean;
   hasOlderMessages: boolean;
@@ -976,6 +987,12 @@ function flushPendingStreamChunk(
                 [messageId]: s.ragDisplayByMessageId[s.streamingMessageId],
               }
             : s.ragDisplayByMessageId;
+          const nextSearchDisplayByMessageId = s.searchDisplayByMessageId[s.streamingMessageId]
+            ? {
+                ...s.searchDisplayByMessageId,
+                [messageId]: s.searchDisplayByMessageId[s.streamingMessageId],
+              }
+            : s.searchDisplayByMessageId;
           return {
             messages: s.messages.map((m) =>
               m.id === s.streamingMessageId
@@ -987,6 +1004,7 @@ function flushPendingStreamChunk(
                 : m,
             ),
             ragDisplayByMessageId: nextRagDisplayByMessageId,
+            searchDisplayByMessageId: nextSearchDisplayByMessageId,
             streamingMessageId: messageId,
           };
         }
@@ -1057,6 +1075,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
   activeConversationId: null,
   messages: [],
   ragDisplayByMessageId: {},
+  searchDisplayByMessageId: {},
   loading: false,
   loadingOlder: false,
   hasOlderMessages: false,
@@ -1671,6 +1690,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
     const conversationId = get().activeConversationId;
     if (!conversationId) throw new Error('No active conversation');
     const activeConversation = get().conversations.find((conversation) => conversation.id === conversationId);
+    const searchHistoryMessages = get().messages;
 
     // Optimistically add user message BEFORE backend call
     const optimisticUserMsg: Message = {
@@ -1708,8 +1728,9 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
     const hasMemoryRag = memIds.length > 0;
     const hasAnyRag = hasKnowledgeRag || hasMemoryRag;
     let placeholderContent = '';
+    let searchDisplayTag = searchProviderId ? buildSearchQueryTag('summarizing') : '';
     let placeholderRagDisplay = '';
-    if (searchProviderId) placeholderContent += buildSearchTag('searching');
+    if (searchDisplayTag) placeholderContent = searchDisplayTag;
     if (hasKnowledgeRag) placeholderRagDisplay += buildKnowledgeTag('searching');
     if (hasMemoryRag) placeholderRagDisplay += buildMemoryTag('searching');
     const placeholderAssistant: Message = {
@@ -1736,6 +1757,9 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
       ragDisplayByMessageId: placeholderRagDisplay
         ? { ...s.ragDisplayByMessageId, [tempAssistantId]: placeholderRagDisplay }
         : s.ragDisplayByMessageId,
+      searchDisplayByMessageId: searchDisplayTag
+        ? { ...s.searchDisplayByMessageId, [tempAssistantId]: searchDisplayTag }
+        : s.searchDisplayByMessageId,
       streaming: true,
       streamingConversationId: conversationId,
       streamingMessageId: tempAssistantId,
@@ -1754,22 +1778,100 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
       let finalContent = content;
       if (searchProviderId) {
         let searchResultTag = '';
+        let summarizedSearchQuery: string | undefined;
+        let querySummaryStatus: 'done' | 'error' | undefined;
+        let querySummaryError: string | undefined;
+        const buildSearchQueryDisplayTag = () => {
+          if (querySummaryStatus === 'error') {
+            return buildSearchQueryTag('error', summarizedSearchQuery, querySummaryError);
+          }
+          if (querySummaryStatus === 'done') {
+            return buildSearchQueryTag('done', summarizedSearchQuery);
+          }
+          return buildSearchQueryTag('summarizing');
+        };
+        const updateSearchDisplay = (tag: string) => {
+          searchDisplayTag = tag;
+          set((s) => ({
+            messages: s.messages.map((message) => (
+              [tempAssistantId, s.streamingMessageId].includes(message.id)
+                ? {
+                    ...message,
+                    content: replaceLeadingSearchDisplayTags(message.content, tag),
+                  }
+                : message
+            )),
+            searchDisplayByMessageId: [tempAssistantId, s.streamingMessageId]
+              .filter((id): id is string => Boolean(id))
+              .reduce<Record<string, string>>(
+                (acc, messageId) => ({
+                  ...acc,
+                  [messageId]: tag,
+                }),
+                { ...s.searchDisplayByMessageId },
+              ),
+          }));
+        };
         try {
-          const searchResult = await useSearchStore.getState().executeSearch(searchProviderId, content);
-          if (searchResult?.ok && searchResult.results.length > 0) {
-            finalContent = formatSearchContent(searchResult.results, content);
-            searchResultTag = buildSearchTag('done', searchResult.results);
+          let searchQuery = buildContextualSearchQuery(searchHistoryMessages, content);
+          try {
+            const generatedQuery = await invoke<string>('generate_search_query', {
+              conversationId,
+              content,
+            });
+            if (generatedQuery.trim()) {
+              searchQuery = generatedQuery.trim();
+              summarizedSearchQuery = searchQuery;
+              querySummaryStatus = 'done';
+            } else {
+              summarizedSearchQuery = searchQuery;
+              querySummaryStatus = 'error';
+              querySummaryError = 'AI 返回空搜索语句，已使用备用搜索语句';
+            }
+          } catch (e) {
+            summarizedSearchQuery = searchQuery;
+            querySummaryStatus = 'error';
+            const reason = String(e).replace(/^Error:\s*/, '');
+            querySummaryError = `${reason}，已使用备用搜索语句`;
+            console.warn('[sendMessage] generate_search_query fallback:', e);
+          }
+          updateSearchDisplay(
+            `${buildSearchQueryDisplayTag()}${buildSearchTag('searching')}`,
+          );
+          const searchResult = await useSearchStore.getState().executeSearch(searchProviderId, searchQuery);
+          if (searchResult?.ok) {
+            searchResultTag = `${buildSearchQueryDisplayTag()}${buildSearchTag('done', searchResult.results)}`;
+            finalContent = formatSearchContent(searchResult.results, content, {
+              query: summarizedSearchQuery,
+              queryStatus: querySummaryStatus,
+              queryError: querySummaryError,
+              status: 'done',
+            });
+          } else {
+            const searchError = searchResult?.error || '搜索失败';
+            searchResultTag = `${buildSearchQueryDisplayTag()}${buildSearchTag('error', undefined, searchError)}`;
+            finalContent = formatSearchContent([], content, {
+              query: summarizedSearchQuery,
+              queryStatus: querySummaryStatus,
+              queryError: querySummaryError,
+              status: 'error',
+              error: searchError,
+            });
           }
         } catch (e) {
-          // Search failed, continue without search results
+          const searchError = String(e);
+          searchResultTag = `${buildSearchQueryDisplayTag()}${buildSearchTag('error', undefined, searchError)}`;
+          finalContent = formatSearchContent([], content, {
+            query: summarizedSearchQuery,
+            queryStatus: querySummaryStatus,
+            queryError: querySummaryError,
+            status: 'error',
+            error: searchError,
+          });
         }
         // Replace searching tag with results, keep RAG searching tags if present
         _streamPrefix = searchResultTag;
-        set((s) => ({
-          messages: s.messages.map(m =>
-            m.id === tempAssistantId ? { ...m, content: searchResultTag } : m
-          ),
-        }));
+        updateSearchDisplay(searchResultTag);
       } else if (hasAnyRag) {
         // RAG display is tracked separately from assistant text to avoid stream
         // content/id updates temporarily removing the retrieval card.
@@ -1782,6 +1884,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
       const userMessage = await invoke<Message>('send_message', {
         conversationId,
         content: finalContent,
+        contentPrefix: searchDisplayTag,
         attachments,
         enabledMcpServerIds: mcpIds.length > 0 ? mcpIds : undefined,
         thinkingBudget,
@@ -2964,6 +3067,16 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
           messages: s.messages.map((m) =>
             preserveMessageIds.includes(m.id) ? { ...m, status: 'complete' as const } : m,
           ),
+          searchDisplayByMessageId: placeholderMessageId
+            && message_id
+            && placeholderMessageId !== message_id
+            && s.searchDisplayByMessageId[placeholderMessageId]
+            && !s.searchDisplayByMessageId[message_id]
+            ? {
+                ...s.searchDisplayByMessageId,
+                [message_id]: s.searchDisplayByMessageId[placeholderMessageId],
+              }
+            : s.searchDisplayByMessageId,
         }));
         if (get().activeConversationId === conversation_id) {
           // Active conversation — refresh messages then clear buffer

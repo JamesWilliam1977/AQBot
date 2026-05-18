@@ -163,9 +163,14 @@
       "title": "聯網搜尋",
       "selectProvider": "選擇搜尋引擎",
       "noProviders": "請先在設定中設定搜尋引擎",
+      "summarizingQuery": "正在總結搜尋語句...",
+      "querySummary": "搜尋語句總結完成",
+      "querySummaryFailed": "搜尋語句總結失敗",
       "searching": "正在聯網搜尋...",
       "failed": "搜尋失敗",
       "resultsCount": "{{count}} 個搜尋結果",
+      "noResults": "未找到相關搜尋結果",
+      "query": "搜尋語句",
       "error": "搜尋失敗"
     },
     "tool": {

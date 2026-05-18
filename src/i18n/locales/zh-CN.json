@@ -163,9 +163,14 @@
       "title": "联网搜索",
       "selectProvider": "选择搜索引擎",
       "noProviders": "请先在设置中配置搜索引擎",
+      "summarizingQuery": "正在总结搜索语句...",
+      "querySummary": "搜索语句总结完成",
+      "querySummaryFailed": "搜索语句总结失败",
       "searching": "正在联网搜索...",
       "failed": "搜索失败",
       "resultsCount": "{{count}}个搜索结果",
+      "noResults": "未找到相关搜索结果",
+      "query": "搜索语句",
       "error": "搜索失败"
     },
     "tool": {

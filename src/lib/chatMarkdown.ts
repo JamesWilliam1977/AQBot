@@ -3,7 +3,7 @@ import { normalizeThinkTagsForMarkdown } from './thinkTags';
 
 export type ChatMarkdownNode = BaseNode;
 
-export const CHAT_CUSTOM_HTML_TAGS = ['think', 'web-search', 'knowledge-retrieval', 'memory-retrieval', 'tool-call', 'img'] as const;
+export const CHAT_CUSTOM_HTML_TAGS = ['think', 'web-search-query', 'web-search', 'knowledge-retrieval', 'memory-retrieval', 'tool-call', 'img'] as const;
 
 /**
  * Strip all aqbot-injected custom tags (with `data-aqbot="1"` attribute) and
@@ -13,6 +13,7 @@ export const CHAT_CUSTOM_HTML_TAGS = ['think', 'web-search', 'knowledge-retrieva
 export function stripAqbotTags(content: string): string {
   return content
     .replace(/<think[^>]*>[\s\S]*?<\/think>\s*/g, '')
+    .replace(/<web-search-query [^>]*data-aqbot="1"[^>]*>[\s\S]*?<\/web-search-query>\s*/g, '')
     .replace(/<knowledge-retrieval [^>]*data-aqbot="1"[^>]*>[\s\S]*?<\/knowledge-retrieval>\s*/g, '')
     .replace(/<memory-retrieval [^>]*data-aqbot="1"[^>]*>[\s\S]*?<\/memory-retrieval>\s*/g, '')
     .replace(/<web-search [^>]*data-aqbot="1"[^>]*>[\s\S]*?<\/web-search>\s*/g, '')

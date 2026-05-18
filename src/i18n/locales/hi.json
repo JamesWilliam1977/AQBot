@@ -163,9 +163,14 @@
       "title": "वेब खोज",
       "selectProvider": "खोज इंजन चुनें",
       "noProviders": "कृपया पहले सेटिंग्स में एक खोज इंजन कॉन्फ़िगर करें",
+      "summarizingQuery": "खोज क्वेरी का सारांश बनाया जा रहा है...",
+      "querySummary": "खोज क्वेरी सारांशित हो गई",
+      "querySummaryFailed": "खोज क्वेरी सारांश विफल",
       "searching": "वेब पर खोज रहे हैं...",
       "failed": "खोज विफल",
       "resultsCount": "{{count}} खोज परिणाम",
+      "noResults": "कोई खोज परिणाम नहीं",
+      "query": "खोज क्वेरी",
       "error": "खोज विफल"
     },
     "tool": {

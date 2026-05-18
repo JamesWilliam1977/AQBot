@@ -86,12 +86,13 @@ describe('chat streaming helpers', () => {
 
   it('strips selected leading display tags while preserving other display prefixes', () => {
     const web = '<web-search status="done" data-aqbot="1">[]</web-search>\n\n';
+    const query = '<web-search-query status="done" data-aqbot="1">query</web-search-query>\n\n';
     const knowledge = '<knowledge-retrieval status="done" data-aqbot="1">[]</knowledge-retrieval>\n\n';
 
     expect(stripLeadingAqbotDisplayTags(
-      `${web}${knowledge}answer`,
+      `${query}${web}${knowledge}answer`,
       ['knowledge-retrieval', 'memory-retrieval'],
-    )).toBe(`${web}answer`);
+    )).toBe(`${query}${web}answer`);
   });
 
   it('temporarily closes streamed native think blocks without dropping leading text', () => {

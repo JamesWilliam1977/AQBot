@@ -163,9 +163,14 @@
       "title": "Recherche Web",
       "selectProvider": "Sélectionner un moteur de recherche",
       "noProviders": "Veuillez d'abord configurer un moteur de recherche dans les paramètres",
+      "summarizingQuery": "Résumé de la requête de recherche...",
+      "querySummary": "Requête de recherche résumée",
+      "querySummaryFailed": "Échec du résumé de la requête de recherche",
       "searching": "Recherche en cours…",
       "failed": "Échec de la recherche",
       "resultsCount": "{{count}} résultats",
+      "noResults": "Aucun résultat de recherche",
+      "query": "Requête de recherche",
       "error": "Échec de la recherche"
     },
     "tool": {

@@ -163,9 +163,14 @@
       "title": "البحث على الويب",
       "selectProvider": "اختيار محرك البحث",
       "noProviders": "يرجى ضبط محرك بحث في الإعدادات أولاً",
+      "summarizingQuery": "جارٍ تلخيص عبارة البحث...",
+      "querySummary": "تم تلخيص عبارة البحث",
+      "querySummaryFailed": "فشل تلخيص عبارة البحث",
       "searching": "جارٍ البحث على الويب...",
       "failed": "فشل البحث",
       "resultsCount": "{{count}} نتيجة بحث",
+      "noResults": "لا توجد نتائج بحث",
+      "query": "عبارة البحث",
       "error": "فشل البحث"
     },
     "tool": {

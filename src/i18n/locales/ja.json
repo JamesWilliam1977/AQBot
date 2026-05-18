@@ -163,9 +163,14 @@
       "title": "Web検索",
       "selectProvider": "検索エンジンを選択",
       "noProviders": "先に設定で検索エンジンを設定してください",
+      "summarizingQuery": "検索クエリを要約中...",
+      "querySummary": "検索クエリの要約が完了しました",
+      "querySummaryFailed": "検索クエリの要約に失敗しました",
       "searching": "Web検索中...",
       "failed": "検索に失敗しました",
       "resultsCount": "{{count}} 件の検索結果",
+      "noResults": "検索結果がありません",
+      "query": "検索クエリ",
       "error": "検索に失敗しました"
     },
     "tool": {

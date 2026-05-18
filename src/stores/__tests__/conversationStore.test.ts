@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Message, MessagePage } from '@/types';
+import { parseSearchContent } from '@/lib/searchUtils';
 
 const invokeMock = vi.fn();
 const listenMock = vi.fn();
@@ -94,6 +95,7 @@ describe('conversationStore pagination', () => {
       activeConversationId: null,
       messages: [],
       ragDisplayByMessageId: {},
+      searchDisplayByMessageId: {},
       loading: false,
       loadingOlder: false,
       hasOlderMessages: false,
@@ -278,6 +280,265 @@ describe('conversationStore pagination', () => {
     vi.useRealTimers();
   });
 
+  it('uses contextual query for web search while keeping the original user content in send_message', async () => {
+    vi.useFakeTimers();
+    listenMock.mockResolvedValue(() => {});
+    let searchQuery = '';
+    let sentContent = '';
+    let sentContentPrefix = '';
+    const searchResponse = deferred<unknown>();
+    invokeMock.mockImplementation((cmd: string, args: Record<string, unknown>) => {
+      if (cmd === 'execute_search') {
+        searchQuery = args.query as string;
+        return searchResponse.promise;
+      }
+      if (cmd === 'generate_search_query') {
+        return Promise.resolve('AQBot Desktop 0.0.76 Windows 下载地址');
+      }
+      if (cmd === 'send_message') {
+        sentContent = args.content as string;
+        sentContentPrefix = args.contentPrefix as string;
+        return Promise.resolve({
+          ...makeMessage(5),
+          id: 'user-real',
+          role: 'user',
+          content: sentContent,
+          provider_id: null,
+          model_id: null,
+        });
+      }
+      if (cmd === 'list_messages_page') {
+        return Promise.resolve(makePage([], false));
+      }
+      throw new Error(`unexpected command: ${cmd}`);
+    });
+    const { useConversationStore } = await import('../conversationStore');
+
+    useConversationStore.setState({
+      activeConversationId: 'conv-1',
+      conversations: [makeConversation('conv-1')] as never[],
+      messages: [
+        {
+          ...makeMessage(1),
+          role: 'user',
+          content: '我要更改网站权限，让浏览器允许访问这个页面。',
+        },
+        {
+          ...makeMessage(2),
+          role: 'assistant',
+          content: '可以打开浏览器站点设置，然后允许对应权限。',
+        },
+      ],
+    });
+
+    const pending = useConversationStore.getState().sendMessage('我已经给你权限了，继续', [], 'search-1');
+    await flushPromises();
+
+    const searchDisplayDuringSearch = Object.values(
+      useConversationStore.getState().searchDisplayByMessageId,
+    ).join('');
+    expect(searchDisplayDuringSearch).toContain('status="searching"');
+    expect(searchDisplayDuringSearch).toContain('query="AQBot Desktop 0.0.76 Windows 下载地址"');
+    expect(searchDisplayDuringSearch).toContain('<web-search-query status="done"');
+
+    searchResponse.resolve({
+      ok: true,
+      query: searchQuery,
+      results: [
+        {
+          title: '权限设置说明',
+          content: '浏览器网站权限可以在站点设置中调整。',
+          url: 'https://example.com/permissions',
+        },
+      ],
+      latencyMs: 12,
+    });
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(600);
+    await pending;
+
+    expect(invokeMock).toHaveBeenCalledWith('generate_search_query', {
+      conversationId: 'conv-1',
+      content: '我已经给你权限了，继续',
+    });
+    expect(searchQuery).toBe('AQBot Desktop 0.0.76 Windows 下载地址');
+    expect(sentContent).toContain('以下是与问题相关的网络搜索结果，请参考回答');
+    expect(sentContent).toContain('我已经给你权限了，继续');
+    expect(parseSearchContent(sentContent).userContent).toBe('我已经给你权限了，继续');
+    expect(parseSearchContent(sentContent).query).toBe('AQBot Desktop 0.0.76 Windows 下载地址');
+    expect(sentContentPrefix).toContain('<web-search-query status="done"');
+    expect(sentContentPrefix).toContain('<web-search status="done"');
+    expect(sentContentPrefix).toContain('权限设置说明');
+    vi.useRealTimers();
+  });
+
+  it('keeps query summary errors visible while continuing with fallback search', async () => {
+    vi.useFakeTimers();
+    listenMock.mockResolvedValue(() => {});
+    let sentContent = '';
+    invokeMock.mockImplementation((cmd: string, args: Record<string, unknown>) => {
+      if (cmd === 'execute_search') {
+        return Promise.resolve({
+          ok: true,
+          query: args.query,
+          results: [],
+          latencyMs: 8,
+        });
+      }
+      if (cmd === 'generate_search_query') {
+        return Promise.reject(new Error('model unavailable'));
+      }
+      if (cmd === 'send_message') {
+        sentContent = args.content as string;
+        return Promise.resolve({
+          ...makeMessage(5),
+          id: 'user-real',
+          role: 'user',
+          content: sentContent,
+          provider_id: null,
+          model_id: null,
+        });
+      }
+      if (cmd === 'list_messages_page') {
+        return Promise.resolve(makePage([], false));
+      }
+      throw new Error(`unexpected command: ${cmd}`);
+    });
+    const { useConversationStore } = await import('../conversationStore');
+
+    useConversationStore.setState({
+      activeConversationId: 'conv-1',
+      conversations: [makeConversation('conv-1')] as never[],
+      messages: [
+        {
+          ...makeMessage(1),
+          role: 'user',
+          content: '帮我搜索 AQBot 下载地址',
+        },
+      ],
+    });
+
+    const pending = useConversationStore.getState().sendMessage('继续', [], 'search-1');
+    await flushPromises();
+
+    const searchDisplay = Object.values(useConversationStore.getState().searchDisplayByMessageId).join('');
+    expect(searchDisplay).toContain('status="done"');
+    expect(searchDisplay).toContain('<web-search-query status="error"');
+    expect(searchDisplay).toContain('model unavailable');
+    await vi.advanceTimersByTimeAsync(600);
+    await pending;
+    expect(parseSearchContent(sentContent).userContent).toBe('继续');
+    expect(parseSearchContent(sentContent).queryError).toContain('model unavailable');
+    expect(parseSearchContent(sentContent).userContent).not.toContain('搜索语句总结失败');
+    vi.useRealTimers();
+  });
+
+  it('keeps search execution errors visible', async () => {
+    vi.useFakeTimers();
+    listenMock.mockResolvedValue(() => {});
+    invokeMock.mockImplementation((cmd: string, args: Record<string, unknown>) => {
+      if (cmd === 'execute_search') {
+        return Promise.resolve({
+          ok: false,
+          query: args.query,
+          results: [],
+          latencyMs: 8,
+          error: 'Tavily request failed',
+        });
+      }
+      if (cmd === 'generate_search_query') {
+        return Promise.resolve('AQBot 下载');
+      }
+      if (cmd === 'send_message') {
+        return Promise.resolve({
+          ...makeMessage(5),
+          id: 'user-real',
+          role: 'user',
+          content: args.content as string,
+          provider_id: null,
+          model_id: null,
+        });
+      }
+      if (cmd === 'list_messages_page') {
+        return Promise.resolve(makePage([], false));
+      }
+      throw new Error(`unexpected command: ${cmd}`);
+    });
+    const { useConversationStore } = await import('../conversationStore');
+
+    useConversationStore.setState({
+      activeConversationId: 'conv-1',
+      conversations: [makeConversation('conv-1')] as never[],
+      messages: [],
+    });
+
+    const pending = useConversationStore.getState().sendMessage('搜索 AQBot 下载', [], 'search-1');
+    await flushPromises();
+
+    const searchDisplay = Object.values(useConversationStore.getState().searchDisplayByMessageId).join('');
+    expect(searchDisplay).toContain('status="error"');
+    expect(searchDisplay).toContain('Tavily request failed');
+    expect(searchDisplay).toContain('<web-search-query status="done"');
+    await vi.advanceTimersByTimeAsync(600);
+    await pending;
+    vi.useRealTimers();
+  });
+
+  it('keeps a visible web-search prefix when search returns zero results', async () => {
+    vi.useFakeTimers();
+    listenMock.mockResolvedValue(() => {});
+    let sentContent = '';
+    invokeMock.mockImplementation((cmd: string, args: Record<string, unknown>) => {
+      if (cmd === 'execute_search') {
+        return Promise.resolve({
+          ok: true,
+          query: args.query,
+          results: [],
+          latencyMs: 8,
+        });
+      }
+      if (cmd === 'generate_search_query') {
+        return Promise.resolve('不存在的主题');
+      }
+      if (cmd === 'send_message') {
+        sentContent = args.content as string;
+        return Promise.resolve({
+          ...makeMessage(5),
+          id: 'user-real',
+          role: 'user',
+          content: sentContent,
+          provider_id: null,
+          model_id: null,
+        });
+      }
+      if (cmd === 'list_messages_page') {
+        return Promise.resolve(makePage([], false));
+      }
+      throw new Error(`unexpected command: ${cmd}`);
+    });
+    const { useConversationStore } = await import('../conversationStore');
+
+    useConversationStore.setState({
+      activeConversationId: 'conv-1',
+      conversations: [makeConversation('conv-1')] as never[],
+      messages: [],
+    });
+
+    const pending = useConversationStore.getState().sendMessage('查一下不存在的主题', [], 'search-1');
+    await flushPromises();
+
+    const searchDisplay = Object.values(useConversationStore.getState().searchDisplayByMessageId).join('');
+    expect(searchDisplay).toContain('<web-search status="done" data-aqbot="1"');
+    expect(searchDisplay).toContain('[]');
+    await vi.advanceTimersByTimeAsync(600);
+    await pending;
+
+    expect(parseSearchContent(sentContent).userContent).toBe('查一下不存在的主题');
+    expect(parseSearchContent(sentContent).status).toBe('done');
+    expect(parseSearchContent(sentContent).sources).toEqual([]);
+    vi.useRealTimers();
+  });
+
   it('keeps RAG display state when the streaming assistant resolves from temp to real id', async () => {
     vi.useFakeTimers();
     const listeners = new Map<string, (event: unknown) => void>();
@@ -349,6 +610,177 @@ describe('conversationStore pagination', () => {
     expect(message?.content).toBe('answer');
     expect(displayById['assistant-1']).toContain('<knowledge-retrieval status="done" data-aqbot="1">');
     expect(displayById['assistant-1']).toContain('"content":"hit"');
+    vi.useRealTimers();
+  });
+
+  it('keeps search display state when the streaming assistant resolves from temp to real id', async () => {
+    vi.useFakeTimers();
+    const listeners = new Map<string, (event: unknown) => void>();
+    listenMock.mockImplementation(async (eventName: string, handler: (event: unknown) => void) => {
+      listeners.set(eventName, handler);
+      return () => {};
+    });
+    const { useConversationStore } = await import('../conversationStore');
+    const display = '<web-search status="done" data-aqbot="1" query="AQBot 下载">[]</web-search>';
+
+    useConversationStore.setState({
+      activeConversationId: 'conv-1',
+      streaming: true,
+      streamingMessageId: 'temp-assistant-1',
+      streamingConversationId: 'conv-1',
+      searchDisplayByMessageId: {
+        'temp-assistant-1': display,
+      },
+      messages: [
+        {
+          ...makeMessage(2),
+          id: 'temp-assistant-1',
+          role: 'assistant',
+          content: '',
+          status: 'partial',
+        },
+      ],
+    });
+
+    await useConversationStore.getState().startStreamListening();
+    listeners.get('chat-stream-chunk')?.({
+      payload: {
+        conversation_id: 'conv-1',
+        message_id: 'assistant-1',
+        chunk: {
+          content: 'answer',
+          thinking: null,
+          tool_calls: null,
+          done: false,
+          usage: null,
+        },
+      },
+    });
+    await vi.advanceTimersByTimeAsync(20);
+
+    const displayById = useConversationStore.getState().searchDisplayByMessageId;
+    expect(displayById['assistant-1']).toContain('query="AQBot 下载"');
+    expect(useConversationStore.getState().messages[0]?.content).toBe('answer');
+    vi.useRealTimers();
+  });
+
+  it('keeps rendered search tags in local assistant content when model thinking starts streaming', async () => {
+    vi.useFakeTimers();
+    const listeners = new Map<string, (event: unknown) => void>();
+    listenMock.mockImplementation(async (eventName: string, handler: (event: unknown) => void) => {
+      listeners.set(eventName, handler);
+      return () => {};
+    });
+    const { useConversationStore } = await import('../conversationStore');
+    const display = '<web-search-query status="done" data-aqbot="1" query="AQBot 产品详情"></web-search-query>\n\n<web-search status="done" data-aqbot="1">[]</web-search>\n\n';
+
+    useConversationStore.setState({
+      activeConversationId: 'conv-1',
+      streaming: true,
+      streamingMessageId: 'temp-assistant-1',
+      streamingConversationId: 'conv-1',
+      searchDisplayByMessageId: {
+        'temp-assistant-1': display,
+      },
+      messages: [
+        {
+          ...makeMessage(2),
+          id: 'temp-assistant-1',
+          role: 'assistant',
+          content: display,
+          status: 'partial',
+        },
+      ],
+    });
+
+    await useConversationStore.getState().startStreamListening();
+    listeners.get('chat-stream-chunk')?.({
+      payload: {
+        conversation_id: 'conv-1',
+        message_id: 'assistant-1',
+        chunk: {
+          content: '<think data-aqbot="1">\n正在分析搜索结果',
+          thinking: '',
+          tool_calls: null,
+          done: false,
+          usage: null,
+        },
+      },
+    });
+    await vi.advanceTimersByTimeAsync(20);
+
+    const message = useConversationStore.getState().messages[0];
+    expect(message?.id).toBe('assistant-1');
+    expect(message?.content).toContain('<web-search-query status="done"');
+    expect(message?.content).toContain('<web-search status="done"');
+    expect(message?.content).toContain('<think data-aqbot="1">');
+    expect(useConversationStore.getState().searchDisplayByMessageId['assistant-1']).toContain('AQBot 产品详情');
+    vi.useRealTimers();
+  });
+
+  it('keeps search display state when a stream finishes before any content chunk', async () => {
+    vi.useFakeTimers();
+    const listeners = new Map<string, (event: unknown) => void>();
+    listenMock.mockImplementation(async (eventName: string, handler: (event: unknown) => void) => {
+      listeners.set(eventName, handler);
+      return () => {};
+    });
+    const { useConversationStore } = await import('../conversationStore');
+    const display = '<web-search status="error" data-aqbot="1" query-status="error" query-error="bad query">Search failed</web-search>';
+
+    useConversationStore.setState({
+      activeConversationId: 'conv-1',
+      streaming: true,
+      streamingMessageId: 'temp-assistant-1',
+      streamingConversationId: 'conv-1',
+      searchDisplayByMessageId: {
+        'temp-assistant-1': display,
+      },
+      messages: [
+        {
+          ...makeMessage(2),
+          id: 'temp-assistant-1',
+          role: 'assistant',
+          content: '',
+          status: 'partial',
+        },
+      ],
+    });
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === 'list_messages_page') {
+        return Promise.resolve(makePage([
+          {
+            ...makeMessage(2),
+            id: 'assistant-1',
+            role: 'assistant',
+            content: 'answer',
+            status: 'complete',
+          },
+        ], false));
+      }
+      throw new Error(`unexpected command: ${cmd}`);
+    });
+
+    await useConversationStore.getState().startStreamListening();
+    listeners.get('chat-stream-chunk')?.({
+      payload: {
+        conversation_id: 'conv-1',
+        message_id: 'assistant-1',
+        chunk: {
+          content: '',
+          thinking: null,
+          tool_calls: null,
+          done: true,
+          is_final: true,
+          usage: null,
+        },
+      },
+    });
+    await vi.advanceTimersByTimeAsync(160);
+    await flushPromises();
+
+    const displayById = useConversationStore.getState().searchDisplayByMessageId;
+    expect(displayById['assistant-1']).toContain('query-error="bad query"');
     vi.useRealTimers();
   });
 

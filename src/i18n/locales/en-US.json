@@ -163,9 +163,14 @@
       "title": "Web Search",
       "selectProvider": "Select search engine",
       "noProviders": "Please configure a search engine in settings first",
+      "summarizingQuery": "Summarizing search query...",
+      "querySummary": "Search query summarized",
+      "querySummaryFailed": "Search query summary failed",
       "searching": "Searching the web...",
       "failed": "Search failed",
       "resultsCount": "{{count}} search results",
+      "noResults": "No search results",
+      "query": "Search query",
       "error": "Search failed"
     },
     "tool": {

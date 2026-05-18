@@ -1,14 +1,10 @@
 import type { Message } from '@/types';
 import { stripAqbotTags } from '@/lib/chatMarkdown';
-import { parseSearchContent } from '@/lib/searchUtils';
+import { buildSearchQueryTag, buildSearchTag, parseSearchContent } from '@/lib/searchUtils';
 import { splitLeadingAqbotDisplayContent } from './chatStreaming';
 
-function buildWebSearchDisplayTag(sources: Array<{ title: string; url: string }>): string {
-  const resultsJson = JSON.stringify(sources.map((source) => ({
-    title: source.title,
-    url: source.url,
-  })));
-  return `<web-search status="done" data-aqbot="1">\n${resultsJson}\n</web-search>\n\n`;
+function hasPersistedDisplayTag(content: string): boolean {
+  return /<(?:web-search-query|web-search|knowledge-retrieval|memory-retrieval)\b[^>]*data-aqbot=["']1["'][^>]*>/i.test(content);
 }
 
 export function buildAssistantDisplayContent(message: Message, messages: Message[]): string {
@@ -17,7 +13,7 @@ export function buildAssistantDisplayContent(message: Message, messages: Message
   }
 
   let content = message.content;
-  if (message.status === 'error' || content.includes('data-aqbot="1"')) {
+  if (message.status === 'error' || hasPersistedDisplayTag(content)) {
     return content;
   }
 
@@ -29,11 +25,19 @@ export function buildAssistantDisplayContent(message: Message, messages: Message
   }
 
   const parentSearch = parseSearchContent(parent.content);
-  if (!parentSearch.hasSearch || parentSearch.sources.length === 0) {
+  if (!parentSearch.hasSearch) {
     return content;
   }
 
-  content = `${buildWebSearchDisplayTag(parentSearch.sources)}${content}`;
+  const queryTag = parentSearch.queryStatus || parentSearch.query
+    ? buildSearchQueryTag(parentSearch.queryStatus ?? 'done', parentSearch.query ?? undefined, parentSearch.queryError ?? undefined)
+    : '';
+  const searchTag = buildSearchTag(
+    parentSearch.status ?? 'done',
+    parentSearch.sources.map((source) => ({ ...source, content: '' })),
+    parentSearch.error ?? undefined,
+  );
+  content = `${queryTag}${searchTag}${content}`;
   return content;
 }
 

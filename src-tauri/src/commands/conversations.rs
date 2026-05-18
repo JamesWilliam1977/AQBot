@@ -14,6 +14,11 @@ use tauri::{Emitter, State};
 const RAG_CONTEXT_TIMEOUT: Duration = Duration::from_secs(60);
 const RAG_RETRIEVAL_FAILED_PREFIX: &str = "检索失败";
 const SYSTEM_PROMPT_LOG_EXCERPT_BYTES: usize = 80;
+const SEARCH_QUERY_HISTORY_LIMIT: usize = 6;
+const SEARCH_QUERY_MESSAGE_CHAR_LIMIT: usize = 500;
+const SEARCH_QUERY_CURRENT_CHAR_LIMIT: usize = 500;
+const SEARCH_QUERY_MAX_TOKENS: u32 = 96;
+const SEARCH_QUERY_RETRY_MAX_TOKENS: u32 = 1024;
 
 fn system_prompt_log_excerpt(prompt: &str) -> &str {
     let end = prompt.floor_char_boundary(prompt.len().min(SYSTEM_PROMPT_LOG_EXCERPT_BYTES));
@@ -362,8 +367,23 @@ fn strip_search_enrichment(content: &str) -> String {
         .to_string()
 }
 
+fn strip_search_metadata_marker(content: &str) -> String {
+    let trimmed_start = content.trim_start();
+    if !trimmed_start.starts_with(SEARCH_MARKER_START) {
+        return content.to_string();
+    }
+
+    let Some(marker_end) = trimmed_start.find(SEARCH_MARKER_END) else {
+        return content.to_string();
+    };
+
+    trimmed_start[marker_end + SEARCH_MARKER_END.len()..]
+        .trim_start_matches('\n')
+        .to_string()
+}
+
 /// Strip display-only tags from assistant message content so they aren't sent to the AI.
-/// Strips: `<web-search data-aqbot="1">`, `<knowledge-retrieval data-aqbot="1">`,
+/// Strips: `<web-search-query data-aqbot="1">`, `<web-search data-aqbot="1">`, `<knowledge-retrieval data-aqbot="1">`,
 /// and `<memory-retrieval data-aqbot="1">` tags,
 /// `:::mcp ... :::` fenced blocks, and `<think>...</think>` blocks.
 fn strip_display_tags(content: &str) -> String {
@@ -372,7 +392,12 @@ fn strip_display_tags(content: &str) -> String {
     // Strip AQBot display tags with data-aqbot attribute
     let content = {
         let mut s = content.to_string();
-        for tag_name in &["web-search", "knowledge-retrieval", "memory-retrieval"] {
+        for tag_name in &[
+            "web-search-query",
+            "web-search",
+            "knowledge-retrieval",
+            "memory-retrieval",
+        ] {
             let tag_start = format!("<{} ", tag_name);
             let tag_end = format!("</{}>", tag_name);
             while let Some(start_pos) = s.find(&tag_start) {
@@ -579,6 +604,9 @@ fn build_message_content(
 ) -> aqbot_core::error::Result<ChatContent> {
     let content = match message.role {
         MessageRole::Assistant => strip_display_tags(&message.content),
+        MessageRole::User if preserve_user_search_context => {
+            strip_search_metadata_marker(&message.content)
+        }
         MessageRole::User if !preserve_user_search_context => {
             strip_search_enrichment(&message.content)
         }
@@ -680,6 +708,33 @@ fn chat_message_from_message(
         tool_calls,
         tool_call_id: message.tool_call_id.clone(),
     })
+}
+
+fn split_auto_compression_history(
+    history_messages: &[ChatMessage],
+    current_user_index: Option<usize>,
+) -> (Vec<ChatMessage>, Vec<ChatMessage>) {
+    let Some(current_index) = current_user_index else {
+        return (history_messages.to_vec(), Vec::new());
+    };
+    if current_index >= history_messages.len() {
+        return (history_messages.to_vec(), Vec::new());
+    }
+
+    let messages_to_compress = history_messages
+        .iter()
+        .enumerate()
+        .filter_map(|(index, message)| {
+            if index == current_index {
+                None
+            } else {
+                Some(message.clone())
+            }
+        })
+        .collect();
+    let post_compression_history = vec![history_messages[current_index].clone()];
+
+    (messages_to_compress, post_compression_history)
 }
 
 #[tauri::command]
@@ -1288,6 +1343,202 @@ fn clean_generated_title(content: &str) -> String {
         .to_string()
 }
 
+fn truncate_chars(text: &str, limit: usize) -> String {
+    text.chars().take(limit).collect()
+}
+
+fn chat_content_text(content: &ChatContent) -> String {
+    match content {
+        ChatContent::Text(text) => text.clone(),
+        ChatContent::Multipart(parts) => parts
+            .iter()
+            .filter_map(|part| part.text.as_deref())
+            .collect::<Vec<_>>()
+            .join(" "),
+    }
+}
+
+fn clean_generated_search_query(content: &str) -> String {
+    let mut cleaned = content.trim().to_string();
+    if cleaned.starts_with("```") {
+        cleaned = cleaned
+            .trim_start_matches("```text")
+            .trim_start_matches("```")
+            .trim_end_matches("```")
+            .trim()
+            .to_string();
+    }
+
+    let first_line = cleaned
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("");
+    let mut query = first_line.trim().to_string();
+    for prefix in [
+        "搜索查询：",
+        "搜索查询:",
+        "查询：",
+        "查询:",
+        "Search query:",
+        "Query:",
+    ] {
+        if query.to_lowercase().starts_with(&prefix.to_lowercase()) {
+            query = query[prefix.len()..].trim().to_string();
+            break;
+        }
+    }
+    query
+        .trim_matches(|c| matches!(c, '"' | '\'' | '“' | '”' | '「' | '」' | '`'))
+        .trim()
+        .to_string()
+}
+
+fn clean_generated_search_query_response(response: &ChatResponse) -> Result<String, String> {
+    let query = clean_generated_search_query(&response.content);
+    if query.is_empty() {
+        let thinking_state = if response
+            .thinking
+            .as_deref()
+            .is_some_and(|thinking| !thinking.trim().is_empty())
+        {
+            "thinking present"
+        } else {
+            "thinking absent"
+        };
+        return Err(format!(
+            "empty content ({thinking_state}, content_chars={}, completion_tokens={}, total_tokens={})",
+            response.content.chars().count(),
+            response.usage.completion_tokens,
+            response.usage.total_tokens,
+        ));
+    }
+    Ok(query)
+}
+
+fn build_search_query_generation_messages_for_attempt(
+    history_messages: &[ChatMessage],
+    current_content: &str,
+    retry: bool,
+) -> Vec<ChatMessage> {
+    let history = history_messages
+        .iter()
+        .rev()
+        .take(SEARCH_QUERY_HISTORY_LIMIT)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(|message| {
+            let role = if message.role == "assistant" {
+                "Assistant"
+            } else {
+                "User"
+            };
+            let text = truncate_chars(
+                &chat_content_text(&message.content).replace(char::is_whitespace, " "),
+                SEARCH_QUERY_MESSAGE_CHAR_LIMIT,
+            );
+            format!("{role}: {text}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let current = truncate_chars(
+        &current_content.replace(char::is_whitespace, " "),
+        SEARCH_QUERY_CURRENT_CHAR_LIMIT,
+    );
+    let user_prompt = format!(
+        "Conversation history:\n{}\n\nLatest user message:\n{}\n\n{}",
+        if history.trim().is_empty() {
+            "(none)"
+        } else {
+            history.as_str()
+        },
+        current,
+        if retry {
+            "You must return exactly one non-empty search query. If uncertain, copy the latest user message and resolve missing product names, people, versions, platforms, and subjects from the conversation history."
+        } else {
+            "Return only the search query."
+        },
+    );
+
+    vec![
+        ChatMessage {
+            role: "system".to_string(),
+            content: ChatContent::Text(
+                if retry {
+                    "You generate web search queries. The previous attempt returned empty visible content. You must immediately return one concise non-empty plain search-engine query. Do not explain, do not use markdown, do not return labels, and do not leave the answer blank."
+                } else {
+                    "You generate web search queries. Rewrite the latest user message into one concise search-engine query using the conversation history. Resolve pronouns and follow-up requests from history. If the latest message only grants permission, says to continue, or says you may search/open pages, use the previous unresolved user search intent. Keep important product names, versions, platforms, error text, and proper nouns. Return only the query, with no explanation, quotes, markdown, or labels."
+                }
+                    .to_string(),
+            ),
+            reasoning_content: None,
+            tool_calls: None,
+            tool_call_id: None,
+        },
+        ChatMessage {
+            role: "user".to_string(),
+            content: ChatContent::Text(user_prompt),
+            reasoning_content: None,
+            tool_calls: None,
+            tool_call_id: None,
+        },
+    ]
+}
+
+fn build_search_query_generation_messages(
+    history_messages: &[ChatMessage],
+    current_content: &str,
+) -> Vec<ChatMessage> {
+    build_search_query_generation_messages_for_attempt(history_messages, current_content, false)
+}
+
+fn build_retry_search_query_generation_messages(
+    history_messages: &[ChatMessage],
+    current_content: &str,
+) -> Vec<ChatMessage> {
+    build_search_query_generation_messages_for_attempt(history_messages, current_content, true)
+}
+
+fn apply_no_system_role(messages: &mut [ChatMessage], no_system_role: bool) {
+    if !no_system_role {
+        return;
+    }
+    for message in messages {
+        if message.role == "system" {
+            message.role = "user".to_string();
+        }
+    }
+}
+
+fn search_query_prompt_char_count(messages: &[ChatMessage]) -> usize {
+    messages
+        .iter()
+        .map(|message| chat_content_text(&message.content).chars().count())
+        .sum()
+}
+
+fn build_search_query_request(
+    model_id: &str,
+    messages: Vec<ChatMessage>,
+    max_tokens: u32,
+    use_max_completion_tokens: Option<bool>,
+) -> ChatRequest {
+    ChatRequest {
+        model: model_id.to_string(),
+        messages,
+        stream: false,
+        temperature: Some(0.0),
+        top_p: None,
+        max_tokens: Some(max_tokens),
+        tools: None,
+        thinking_budget: Some(0),
+        thinking_level: Some("off".to_string()),
+        reasoning_profile: None,
+        use_max_completion_tokens,
+        thinking_param_style: None,
+    }
+}
+
 async fn call_title_chat(
     adapter: &dyn ProviderAdapter,
     ctx: &ProviderRequestContext,
@@ -1666,6 +1917,163 @@ pub async fn regenerate_conversation_title(
 }
 
 #[tauri::command]
+pub async fn generate_search_query(
+    state: State<'_, AppState>,
+    conversation_id: String,
+    content: String,
+) -> Result<String, String> {
+    let conversation =
+        aqbot_core::repo::conversation::get_conversation(&state.sea_db, &conversation_id)
+            .await
+            .map_err(|e| e.to_string())?;
+    let provider =
+        aqbot_core::repo::provider::get_provider(&state.sea_db, &conversation.provider_id)
+            .await
+            .map_err(|e| e.to_string())?;
+    let key_row =
+        aqbot_core::repo::provider::get_active_key(&state.sea_db, &conversation.provider_id)
+            .await
+            .map_err(|e| e.to_string())?;
+    let decrypted_key = aqbot_core::crypto::decrypt_key(&key_row.key_encrypted, &state.master_key)
+        .map_err(|e| e.to_string())?;
+    let settings = aqbot_core::repo::settings::get_settings(&state.sea_db)
+        .await
+        .unwrap_or_default();
+    let resolved_model = aqbot_core::repo::provider::get_model(
+        &state.sea_db,
+        &conversation.provider_id,
+        &conversation.model_id,
+    )
+    .await
+    .ok();
+    let model_param_overrides = resolved_model.and_then(|model| model.param_overrides);
+    let no_system_role = model_param_overrides
+        .as_ref()
+        .and_then(|params| params.no_system_role)
+        .unwrap_or(false);
+    let use_max_completion_tokens = model_param_overrides
+        .as_ref()
+        .and_then(|params| params.use_max_completion_tokens);
+
+    let messages = aqbot_core::repo::message::list_messages(&state.sea_db, &conversation_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let marker_idx = messages.iter().rposition(|message| {
+        message.role == MessageRole::System
+            && (message.content == "<!-- context-clear -->"
+                || message.content == crate::context_manager::COMPRESSION_MARKER)
+    });
+    let effective_messages = match marker_idx {
+        Some(idx) => &messages[idx + 1..],
+        None => &messages[..],
+    };
+    let file_store = aqbot_core::file_store::FileStore::new();
+    let mut history_messages = Vec::new();
+    for message in effective_messages {
+        if !matches!(message.role, MessageRole::User | MessageRole::Assistant) {
+            continue;
+        }
+        if message.status == "error" || message.status == "partial" {
+            continue;
+        }
+        history_messages.push(
+            chat_message_from_message(&file_store, message, false, None, false)
+                .map_err(|e| e.to_string())?,
+        );
+    }
+
+    let current_content = strip_search_enrichment(&content);
+    let mut prompt_messages =
+        build_search_query_generation_messages(&history_messages, &current_content);
+    apply_no_system_role(&mut prompt_messages, no_system_role);
+
+    let ctx = ProviderRequestContext {
+        api_key: decrypted_key,
+        key_id: key_row.id.clone(),
+        provider_id: provider.id.clone(),
+        base_url: Some(resolve_base_url_for_type(
+            &provider.api_host,
+            &provider.provider_type,
+        )),
+        api_path: provider.api_path.clone(),
+        proxy_config: ProviderProxyConfig::resolve(&provider.proxy_config, &settings),
+        custom_headers: provider
+            .custom_headers
+            .as_ref()
+            .and_then(|headers| serde_json::from_str(headers).ok()),
+    };
+    let registry = ProviderRegistry::create_default();
+    let registry_key = provider_type_to_registry_key(&provider.provider_type);
+    let adapter = registry
+        .get(registry_key)
+        .ok_or_else(|| format!("Adapter not found for provider type: {}", registry_key))?;
+    let prompt_chars = search_query_prompt_char_count(&prompt_messages);
+    let request = build_search_query_request(
+        &conversation.model_id,
+        prompt_messages,
+        SEARCH_QUERY_MAX_TOKENS,
+        use_max_completion_tokens,
+    );
+    let response = adapter
+        .chat(&ctx, request)
+        .await
+        .map_err(|e| e.to_string())?;
+    tracing::info!(
+        "[search-query-gen] attempt=initial provider={} model={} prompt_chars={} content_chars={} thinking_present={} completion_tokens={} total_tokens={}",
+        provider.id,
+        conversation.model_id,
+        prompt_chars,
+        response.content.chars().count(),
+        response.thinking.as_deref().is_some_and(|thinking| !thinking.trim().is_empty()),
+        response.usage.completion_tokens,
+        response.usage.total_tokens,
+    );
+    match clean_generated_search_query_response(&response) {
+        Ok(query) => return Ok(query),
+        Err(first_reason) => {
+            tracing::warn!(
+                "[search-query-gen] attempt=initial empty provider={} model={} reason={}",
+                provider.id,
+                conversation.model_id,
+                first_reason
+            );
+
+            let mut retry_messages =
+                build_retry_search_query_generation_messages(&history_messages, &current_content);
+            apply_no_system_role(&mut retry_messages, no_system_role);
+            let retry_prompt_chars = search_query_prompt_char_count(&retry_messages);
+            let retry_request = build_search_query_request(
+                &conversation.model_id,
+                retry_messages,
+                SEARCH_QUERY_RETRY_MAX_TOKENS,
+                use_max_completion_tokens,
+            );
+            let retry_response = adapter
+                .chat(&ctx, retry_request)
+                .await
+                .map_err(|e| e.to_string())?;
+            tracing::info!(
+                "[search-query-gen] attempt=retry provider={} model={} prompt_chars={} content_chars={} thinking_present={} completion_tokens={} total_tokens={}",
+                provider.id,
+                conversation.model_id,
+                retry_prompt_chars,
+                retry_response.content.chars().count(),
+                retry_response.thinking.as_deref().is_some_and(|thinking| !thinking.trim().is_empty()),
+                retry_response.usage.completion_tokens,
+                retry_response.usage.total_tokens,
+            );
+
+            match clean_generated_search_query_response(&retry_response) {
+                Ok(query) => Ok(query),
+                Err(retry_reason) => Err(format!(
+                    "AI returned empty search query after retry: initial {first_reason}; retry {retry_reason}"
+                )),
+            }
+        }
+    }
+}
+
+#[tauri::command]
 pub async fn cancel_stream(
     state: State<'_, AppState>,
     conversation_id: String,
@@ -1905,7 +2313,7 @@ fn spawn_stream_task(
                 id: Set(assistant_message_id.clone()),
                 conversation_id: Set(conversation_id.clone()),
                 role: Set("assistant".to_string()),
-                content: Set(String::new()),
+                content: Set(content_prefix.clone()),
                 provider_id: Set(Some(provider.id.clone())),
                 model_id: Set(Some(model_id.clone())),
                 token_count: Set(None),
@@ -2341,6 +2749,7 @@ pub async fn send_message(
     state: State<'_, AppState>,
     conversation_id: String,
     content: String,
+    content_prefix: Option<String>,
     attachments: Vec<AttachmentInput>,
     enabled_mcp_server_ids: Option<Vec<String>>,
     thinking_budget: Option<u32>,
@@ -2489,8 +2898,10 @@ pub async fn send_message(
     )
     .await;
 
-    // Build memory retrieval tag for persistence before moving source_results
+    // Build display tags for persistence before moving source_results. Search
+    // display is generated before send_message; RAG display is generated here.
     let memory_tag = build_memory_retrieval_tag(&rag_result.source_results);
+    let assistant_content_prefix = format!("{}{}", content_prefix.unwrap_or_default(), memory_tag);
 
     if rag_cancelled {
         state
@@ -2526,6 +2937,7 @@ pub async fn send_message(
     };
 
     let mut history_messages: Vec<ChatMessage> = Vec::new();
+    let mut current_user_history_index: Option<usize> = None;
     for m in effective_messages {
         if m.role == MessageRole::System
             && (m.content == "<!-- context-clear -->"
@@ -2543,16 +2955,18 @@ pub async fn send_message(
         if m.status == "error" {
             continue;
         }
-        history_messages.push(
-            chat_message_from_message(
-                &file_store,
-                m,
-                document_attachment_reading_enabled,
-                model_context_window,
-                m.id == user_message.id,
-            )
-            .map_err(|e| e.to_string())?,
-        );
+        let chat_message = chat_message_from_message(
+            &file_store,
+            m,
+            document_attachment_reading_enabled,
+            model_context_window,
+            m.id == user_message.id,
+        )
+        .map_err(|e| e.to_string())?;
+        if m.id == user_message.id {
+            current_user_history_index = Some(history_messages.len());
+        }
+        history_messages.push(chat_message);
     }
 
     // Resolve proxy config early (needed for both summary generation and main request)
@@ -2577,23 +2991,31 @@ pub async fn send_message(
             model_context_window,
         )
     {
+        let (messages_to_compress, post_compression_history) =
+            split_auto_compression_history(&history_messages, current_user_history_index);
         // Perform synchronous compression before sending
-        if let Ok(summary_text) = do_compress(
-            &state.sea_db,
-            &conversation_id,
-            &history_messages,
-            existing_summary.as_ref().map(|s| s.summary_text.as_str()),
-            &provider,
-            &decrypted_key,
-            &key_row.id,
-            &resolved_proxy,
-            &conversation.model_id,
-            use_max_completion_tokens,
-            &global_settings,
-            &state.master_key,
-        )
-        .await
-        {
+        let compression_result = if messages_to_compress.is_empty() {
+            None
+        } else {
+            do_compress(
+                &state.sea_db,
+                &conversation_id,
+                &messages_to_compress,
+                existing_summary.as_ref().map(|s| s.summary_text.as_str()),
+                &provider,
+                &decrypted_key,
+                &key_row.id,
+                &resolved_proxy,
+                &conversation.model_id,
+                use_max_completion_tokens,
+                &global_settings,
+                &state.master_key,
+            )
+            .await
+            .ok()
+        };
+
+        if let Some(summary_text) = compression_result {
             // Insert compression marker
             let _ = aqbot_core::repo::message::create_message(
                 &state.sea_db,
@@ -2616,7 +3038,7 @@ pub async fn send_message(
             // Context = system + summary + current user message only
             chat_messages = crate::context_manager::build_context(
                 &chat_messages,
-                &[],
+                &post_compression_history,
                 Some(&summary_text),
                 model_context_window,
             );
@@ -2726,7 +3148,7 @@ pub async fn send_message(
         state.master_key,
         cancel_flag,
         state.stream_cancel_flags.clone(),
-        memory_tag,
+        assistant_content_prefix,
         false,
         false,
     );
@@ -4083,7 +4505,7 @@ mod tests {
     fn current_user_search_context_is_preserved_for_model_request() {
         let file_store = aqbot_core::file_store::FileStore::new();
         let content = concat!(
-            "<!-- search:{\"sources\":[{\"title\":\"A\",\"url\":\"https://example.com\"}]} -->\n",
+            "<!-- search:{\"sources\":[{\"title\":\"A\",\"url\":\"https://example.com\"}],\"query\":\"AQBot 产品详情\",\"queryStatus\":\"error\",\"queryError\":\"搜索语句总结失败：AI returned empty search query\"} -->\n",
             "以下是与问题相关的网络搜索结果，请参考回答：\n\n",
             "1. **A** - https://example.com\n   search body\n\n",
             "---\n\n",
@@ -4116,14 +4538,11 @@ mod tests {
             chat_message_from_message(&file_store, &message, false, None, true).unwrap();
         let serialized = serde_json::to_value(chat_message).unwrap();
 
-        assert!(serialized["content"]
-            .as_str()
-            .unwrap()
-            .contains("search body"));
-        assert!(serialized["content"]
-            .as_str()
-            .unwrap()
-            .contains("用户原始问题"));
+        let content = serialized["content"].as_str().unwrap();
+        assert!(content.contains("search body"));
+        assert!(content.contains("用户原始问题"));
+        assert!(!content.contains("<!-- search:"));
+        assert!(!content.contains("搜索语句总结失败"));
     }
 
     #[test]
@@ -4134,6 +4553,8 @@ mod tests {
             conversation_id: "conv-1".into(),
             role: MessageRole::Assistant,
             content: concat!(
+                "<web-search-query status=\"done\" query=\"AQBot 产品详情\" data-aqbot=\"1\">",
+                "</web-search-query>\n\n",
                 "<web-search status=\"done\" data-aqbot=\"1\">\n",
                 "[{\"title\":\"A\",\"url\":\"https://example.com\",\"content\":\"search body\"}]\n",
                 "</web-search>\n\n",
@@ -4163,6 +4584,156 @@ mod tests {
         let serialized = serde_json::to_value(chat_message).unwrap();
 
         assert_eq!(serialized["content"], "final answer");
+    }
+
+    #[test]
+    fn auto_compression_excludes_current_user_from_summary_and_keeps_it_for_request() {
+        let history_messages = vec![
+            ChatMessage {
+                role: "user".to_string(),
+                content: ChatContent::Text("old user message".to_string()),
+                reasoning_content: None,
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: ChatContent::Text("old assistant message".to_string()),
+                reasoning_content: None,
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: ChatContent::Text("current user message with search body".to_string()),
+                reasoning_content: None,
+                tool_calls: None,
+                tool_call_id: None,
+            },
+        ];
+
+        let (messages_to_compress, post_compression_history) =
+            split_auto_compression_history(&history_messages, Some(2));
+
+        assert_eq!(messages_to_compress.len(), 2);
+        assert_eq!(post_compression_history.len(), 1);
+        assert!(matches!(
+            &post_compression_history[0].content,
+            ChatContent::Text(content) if content == "current user message with search body"
+        ));
+        assert!(!messages_to_compress.iter().any(|message| {
+            matches!(
+                &message.content,
+                ChatContent::Text(content) if content.contains("current user message")
+            )
+        }));
+    }
+
+    #[test]
+    fn clean_generated_search_query_keeps_only_plain_query_text() {
+        assert_eq!(
+            clean_generated_search_query("搜索查询：\"AQBot Windows 0.0.76 下载\""),
+            "AQBot Windows 0.0.76 下载"
+        );
+        assert_eq!(
+            clean_generated_search_query("```text\nChrome 网站权限 设置\n```"),
+            "Chrome 网站权限 设置"
+        );
+    }
+
+    #[test]
+    fn search_query_prompt_uses_latest_user_message_and_history() {
+        let messages = build_search_query_generation_messages(
+            &[
+                ChatMessage {
+                    role: "user".to_string(),
+                    content: ChatContent::Text(
+                        "帮我搜索 AQBot Desktop Windows 下载地址".to_string(),
+                    ),
+                    reasoning_content: None,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+                ChatMessage {
+                    role: "assistant".to_string(),
+                    content: ChatContent::Text("需要联网搜索确认。".to_string()),
+                    reasoning_content: None,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+            ],
+            "没事，给你权限了，你可以搜索和打开任何网页了",
+        );
+        let prompt = match &messages[1].content {
+            ChatContent::Text(content) => content,
+            ChatContent::Multipart(_) => panic!("expected text prompt"),
+        };
+
+        assert!(prompt.contains("AQBot Desktop Windows 下载地址"));
+        assert!(prompt.contains("没事，给你权限了"));
+        assert!(prompt.contains("Return only the search query"));
+    }
+
+    #[test]
+    fn empty_search_query_response_requires_retry_without_using_thinking() {
+        let response = ChatResponse {
+            id: "resp-1".to_string(),
+            model: "mimo-v2.5".to_string(),
+            content: String::new(),
+            thinking: Some("AQBot 产品详情".to_string()),
+            usage: TokenUsage {
+                prompt_tokens: 100,
+                completion_tokens: 96,
+                total_tokens: 196,
+            },
+            tool_calls: None,
+        };
+
+        let err = clean_generated_search_query_response(&response)
+            .expect_err("empty content should fail");
+
+        assert!(err.contains("empty content"));
+        assert!(err.contains("thinking present"));
+        assert!(!err.contains("AQBot 产品详情"));
+    }
+
+    #[test]
+    fn retry_search_query_prompt_requires_a_non_empty_query() {
+        let messages = build_retry_search_query_generation_messages(
+            &[
+                ChatMessage {
+                    role: "user".to_string(),
+                    content: ChatContent::Text("licoy 的最新开源项目".to_string()),
+                    reasoning_content: None,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+                ChatMessage {
+                    role: "assistant".to_string(),
+                    content: ChatContent::Text("第一个产品是 AQBot。".to_string()),
+                    reasoning_content: None,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+            ],
+            "给我第一个产品的详情",
+        );
+        let prompt = match &messages[1].content {
+            ChatContent::Text(content) => content,
+            ChatContent::Multipart(_) => panic!("expected text prompt"),
+        };
+
+        assert!(prompt.contains("must return exactly one non-empty search query"));
+        assert!(prompt.contains("给我第一个产品的详情"));
+        assert!(prompt.contains("AQBot"));
+    }
+
+    #[test]
+    fn retry_search_query_request_uses_enough_tokens_for_thinking_models() {
+        assert!(
+            SEARCH_QUERY_RETRY_MAX_TOKENS >= 1024,
+            "retry query generation needs enough output budget for models that emit reasoning before visible content"
+        );
     }
 
     #[test]

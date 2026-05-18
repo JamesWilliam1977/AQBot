@@ -163,9 +163,14 @@
       "title": "Websuche",
       "selectProvider": "Suchmaschine auswählen",
       "noProviders": "Bitte konfigurieren Sie zuerst eine Suchmaschine in den Einstellungen",
+      "summarizingQuery": "Suchanfrage wird zusammengefasst...",
+      "querySummary": "Suchanfrage zusammengefasst",
+      "querySummaryFailed": "Zusammenfassung der Suchanfrage fehlgeschlagen",
       "searching": "Websuche läuft…",
       "failed": "Suche fehlgeschlagen",
       "resultsCount": "{{count}} Suchergebnisse",
+      "noResults": "Keine Suchergebnisse",
+      "query": "Suchanfrage",
       "error": "Suche fehlgeschlagen"
     },
     "tool": {

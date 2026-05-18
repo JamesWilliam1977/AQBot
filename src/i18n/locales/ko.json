@@ -163,9 +163,14 @@
       "title": "웹 검색",
       "selectProvider": "검색 엔진 선택",
       "noProviders": "설정에서 먼저 검색 엔진을 구성하세요",
+      "summarizingQuery": "검색어를 요약하는 중...",
+      "querySummary": "검색어 요약 완료",
+      "querySummaryFailed": "검색어 요약 실패",
       "searching": "웹 검색 중...",
       "failed": "검색에 실패했습니다",
       "resultsCount": "{{count}}개의 검색 결과",
+      "noResults": "검색 결과 없음",
+      "query": "검색어",
       "error": "검색에 실패했습니다"
     },
     "tool": {

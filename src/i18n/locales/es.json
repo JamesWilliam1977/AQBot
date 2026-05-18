@@ -163,9 +163,14 @@
       "title": "Búsqueda web",
       "selectProvider": "Seleccionar motor de búsqueda",
       "noProviders": "Configure primero un motor de búsqueda en ajustes",
+      "summarizingQuery": "Resumiendo consulta de búsqueda...",
+      "querySummary": "Consulta de búsqueda resumida",
+      "querySummaryFailed": "Error al resumir la consulta de búsqueda",
       "searching": "Buscando en la web...",
       "failed": "Error en la búsqueda",
       "resultsCount": "{{count}} resultados de búsqueda",
+      "noResults": "No hay resultados de búsqueda",
+      "query": "Consulta de búsqueda",
       "error": "Error en la búsqueda"
     },
     "tool": {

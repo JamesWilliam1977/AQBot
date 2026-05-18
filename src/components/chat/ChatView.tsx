@@ -36,7 +36,7 @@ import {
   shouldRenderStandaloneAssistantError,
   type PendingDisplayVersionSelection,
 } from '@/lib/chatMultiModel';
-import { WebSearchNode } from './WebSearchNode';
+import { WebSearchNode, WebSearchQueryNode } from './WebSearchNode';
 import { MemoryRetrievalNode } from './MemoryRetrievalNode';
 import { KnowledgeRetrievalNode } from './KnowledgeRetrievalNode';
 import { McpContainerNode } from './McpContainerNode';
@@ -72,6 +72,7 @@ import {
   shouldHideAssistantBubble,
   splitAssistantErrorDisplayContent,
 } from './toolCallDisplay';
+import { resolveAssistantMessageForBubbleKey } from './chatMessageLookup';
 import { ChatScrollIndicator } from './ChatScrollIndicator';
 import { ChatMinimap, MinimapScrollProvider } from './ChatMinimap';
 import { MultiModelDisplay, LayoutSwitcher, type MultiModelDisplayMode } from './MultiModelDisplay';
@@ -1040,7 +1041,7 @@ function ToolCallNode(props: NodeComponentProps<{
   );
 }
 
-setCustomComponents('chat', { think: ThinkNode, 'web-search': WebSearchNode, 'knowledge-retrieval': KnowledgeRetrievalNode, 'memory-retrieval': MemoryRetrievalNode, 'tool-call': ToolCallNode, d2: ChatD2Node, vmr_container: McpContainerNode, image: ChatImageNode, img: ChatImageNode });
+setCustomComponents('chat', { think: ThinkNode, 'web-search-query': WebSearchQueryNode, 'web-search': WebSearchNode, 'knowledge-retrieval': KnowledgeRetrievalNode, 'memory-retrieval': MemoryRetrievalNode, 'tool-call': ToolCallNode, d2: ChatD2Node, vmr_container: McpContainerNode, image: ChatImageNode, img: ChatImageNode });
 
 const AssistantMarkdown = React.memo(function AssistantMarkdown({
   content,
@@ -1983,6 +1984,7 @@ export function ChatView() {
   const activeConversationId = useConversationStore((s) => s.activeConversationId);
   const messages = useConversationStore((s) => s.messages);
   const ragDisplayByMessageId = useConversationStore((s) => s.ragDisplayByMessageId);
+  const searchDisplayByMessageId = useConversationStore((s) => s.searchDisplayByMessageId);
   const loading = useConversationStore((s) => s.loading);
   const loadingOlder = useConversationStore((s) => s.loadingOlder);
   const hasOlderMessages = useConversationStore((s) => s.hasOlderMessages);
@@ -2728,12 +2730,12 @@ export function ChatView() {
     () => new Map(messages.map((msg) => [msg.id, msg])),
     [messages],
   );
-  // Separate lookup: prefixed parent key → active assistant message (for stable bubble keys)
+  // Separate lookup: parent message id → active assistant message (for stable bubble keys)
   const assistantByParentId = useMemo(() => {
     const map = new Map<string, Message>();
     for (const msg of messages) {
       if (msg.role === 'assistant' && msg.parent_message_id && msg.is_active !== false) {
-        map.set(`ai:${msg.parent_message_id}`, msg);
+        map.set(msg.parent_message_id, msg);
       }
     }
     return map;
@@ -3030,7 +3032,8 @@ export function ChatView() {
       // Skip duplicate assistant messages with the same parent (multi-model parallel race).
       const stableKey = msg.parent_message_id ? `ai:${msg.parent_message_id}` : msg.id;
       if (nextCache.has(stableKey)) continue; // already rendered for this parent
-      const signature = `ai:${msg.id}:${aiContent}`;
+      const displaySignature = msg.role === 'assistant' ? searchDisplayByMessageId[msg.id] ?? '' : '';
+      const signature = `ai:${msg.id}:${displaySignature}:${aiContent}`;
       const cached = cache.get(stableKey);
       const item = cached?.signature === signature
         ? cached.item
@@ -3041,7 +3044,7 @@ export function ChatView() {
 
     bubbleItemCacheRef.current = nextCache;
     return nextItems;
-  }, [activeMessages, streaming, streamingMessageId, thinkingActiveMessageIds, userSearchContentById]);
+  }, [activeMessages, searchDisplayByMessageId, streaming, streamingMessageId, thinkingActiveMessageIds, userSearchContentById]);
 
   // Append compressing placeholder when compression is in progress
   const finalBubbleItems = useMemo(() => {
@@ -3104,7 +3107,7 @@ export function ChatView() {
         continue;
       }
       // Skip error messages — they render as Alert, not markdown
-      const msg = assistantByParentId.get(String(item.key)) ?? messageById.get(String(item.key));
+      const msg = resolveAssistantMessageForBubbleKey(item.key, assistantByParentId, messageById);
       if (msg?.status === 'error') {
         continue;
       }
@@ -3333,7 +3336,7 @@ export function ChatView() {
 
   const aiRole = useCallback((bubbleData: BubbleItemType) => {
     // bubbleData.key is parent_message_id for stable rendering
-    const msg = assistantByParentId.get(String(bubbleData.key)) ?? messageById.get(String(bubbleData.key));
+    const msg = resolveAssistantMessageForBubbleKey(bubbleData.key, assistantByParentId, messageById);
     const isStreaming = isAssistantStreamingForRender({
       isStreaming: streaming,
       messageId: msg?.id,
@@ -3345,8 +3348,10 @@ export function ChatView() {
       Boolean(msg?.id && contentRendererMessageIdsRef.current.has(msg.id)),
     );
     const assistantCopyText = stripAqbotTags(msg?.content ?? (typeof bubbleData.content === 'string' ? bubbleData.content : ''));
+    const searchDisplayPrefix = msg?.id ? searchDisplayByMessageId[msg.id] : undefined;
     const ragDisplayPrefix = msg?.id ? ragDisplayByMessageId[msg.id] : undefined;
-    const parsedNodes = shouldRenderFromContent || ragDisplayPrefix
+    const displayPrefix = `${searchDisplayPrefix ?? ''}${ragDisplayPrefix ?? ''}` || undefined;
+    const parsedNodes = shouldRenderFromContent || displayPrefix
       ? undefined
       : aiContentNodesById.get(String(bubbleData.key));
     const { footerLoading: rawFooterLoading } = getStreamingLoadingState(isStreaming, bubbleData.content);
@@ -3411,8 +3416,10 @@ export function ChatView() {
         const renderContent = typeof content === 'string' && content.length > 0
           ? content
           : (msg?.content ?? '');
+        const renderContentHasSearchDisplay = /<(?:web-search-query|web-search)\b[^>]*data-aqbot=["']1["'][^>]*>/i.test(renderContent);
+        const effectiveDisplayPrefix = `${renderContentHasSearchDisplay ? '' : searchDisplayPrefix ?? ''}${ragDisplayPrefix ?? ''}` || undefined;
         const renderLoadingState = getStreamingLoadingState(isStreaming, renderContent);
-        const hasDisplayContent = hasAqbotDisplayContent(renderContent) || Boolean(ragDisplayPrefix);
+        const hasDisplayContent = hasAqbotDisplayContent(renderContent) || Boolean(effectiveDisplayPrefix);
         const hasRenderedModelText = hasModelVisibleContent(renderContent, stripAqbotTags);
         const shouldShowInitialDots = renderLoadingState.bubbleLoading && !hasDisplayContent;
         const msgMarker = <span data-aqbot-msg={msg?.id} style={{ height: 0, overflow: 'hidden', lineHeight: 0 }} />;
@@ -3520,7 +3527,7 @@ export function ChatView() {
               codeBlockLightTheme={codeBlockLightTheme}
               codeBlockThemes={codeBlockThemes}
               codeFontFamily={settings.code_font_family || undefined}
-              displayPrefix={ragDisplayPrefix}
+              displayPrefix={effectiveDisplayPrefix}
             />
             {!isAgentMsg && isStreaming && hasDisplayContent && !hasRenderedModelText && (
               <div className="aqbot-streaming-dots" aria-hidden="true" style={{ marginTop: 8 }}>

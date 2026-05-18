@@ -15,7 +15,9 @@ vi.mock('@/lib/modelCapabilities', () => ({
 }));
 
 vi.mock('@/lib/searchUtils', () => ({
+  buildContextualSearchQuery: (_messages: Message[], currentContent: string) => currentContent,
   formatSearchContent: (content: string) => content,
+  buildSearchQueryTag: () => '',
   buildSearchTag: () => '',
 }));
 

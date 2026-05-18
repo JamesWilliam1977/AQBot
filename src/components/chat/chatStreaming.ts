@@ -76,10 +76,10 @@ export function shouldShowInitialStreamingDots(
 
 export function hasAqbotDisplayContent(content: unknown): boolean {
   return typeof content === 'string'
-    && /<(?:knowledge-retrieval|memory-retrieval|web-search)\b[^>]*data-aqbot=["']1["'][^>]*>/i.test(content);
+    && /<(?:knowledge-retrieval|memory-retrieval|web-search-query|web-search)\b[^>]*data-aqbot=["']1["'][^>]*>/i.test(content);
 }
 
-const LEADING_AQBOT_DISPLAY_TAG_RE = /^\s*<(knowledge-retrieval|memory-retrieval|web-search)\b[^>]*data-aqbot=["']1["'][^>]*>[\s\S]*?<\/\1>\s*/i;
+const LEADING_AQBOT_DISPLAY_TAG_RE = /^\s*<(knowledge-retrieval|memory-retrieval|web-search-query|web-search)\b[^>]*data-aqbot=["']1["'][^>]*>[\s\S]*?<\/\1>\s*/i;
 
 export function splitLeadingAqbotDisplayContent(content: string): { prefix: string; body: string } {
   let body = content;

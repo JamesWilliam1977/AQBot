@@ -330,6 +330,7 @@ pub fn run() {
         commands::search::delete_search_provider,
         commands::search::test_search_provider,
         commands::search::execute_search,
+        commands::conversations::generate_search_query,
         // mcp servers
         commands::mcp::list_mcp_servers,
         commands::mcp::create_mcp_server,
