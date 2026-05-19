@@ -35,7 +35,7 @@
     "@tauri-apps/plugin-shell": "^2.3.5",
     "@tauri-apps/plugin-updater": "^2.10.0",
     "@terrastruct/d2": "^0.1.33",
-    "antd": "^6.3.3",
+    "antd": "^6.4.3",
     "antd-style": "^4.1.0",
     "clsx": "^2.1.1",
     "emoji-picker-element": "^1.29.1",
