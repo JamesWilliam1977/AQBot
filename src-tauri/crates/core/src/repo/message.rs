@@ -72,6 +72,29 @@ pub async fn list_messages(db: &DatabaseConnection, conversation_id: &str) -> Re
     rows.into_iter().map(message_from_entity).collect()
 }
 
+pub async fn list_messages_for_model_context(
+    db: &DatabaseConnection,
+    conversation_id: &str,
+) -> Result<Vec<Message>> {
+    let rows = messages::Entity::find()
+        .filter(messages::Column::ConversationId.eq(conversation_id))
+        .filter(
+            Condition::any()
+                .add(messages::Column::IsActive.eq(1))
+                .add(
+                    Condition::all()
+                        .add(messages::Column::VersionIndex.eq(-1))
+                        .add(messages::Column::Role.is_in(["assistant", "tool"])),
+                ),
+        )
+        .order_by_asc(messages::Column::CreatedAt)
+        .order_by_asc(messages::Column::Id)
+        .all(db)
+        .await?;
+
+    rows.into_iter().map(message_from_entity).collect()
+}
+
 pub async fn list_messages_page(
     db: &DatabaseConnection,
     conversation_id: &str,
@@ -572,6 +595,87 @@ mod tests {
         assert_eq!(msg.attachments[0].file_type, "image/png");
         assert_eq!(msg.attachments[0].file_path, "conv-1/image.png");
         assert_eq!(msg.attachments[0].file_size, 3);
+    }
+
+    #[tokio::test]
+    async fn list_messages_for_model_context_includes_inactive_tool_scaffolding_only() {
+        let h = create_test_pool().await.unwrap();
+        let db = &h.conn;
+
+        let conv = conversation::create_conversation(db, "Tool Chat", "model-1", "prov-1", None)
+            .await
+            .unwrap();
+
+        let user_msg = create_message(db, &conv.id, MessageRole::User, "Run tool", &[], None, 0)
+            .await
+            .unwrap();
+        let visible_reply = create_message(
+            db,
+            &conv.id,
+            MessageRole::Assistant,
+            "Done",
+            &[],
+            Some(&user_msg.id),
+            0,
+        )
+        .await
+        .unwrap();
+        let scaffold_id = create_assistant_tool_call_message(
+            db,
+            &conv.id,
+            "",
+            Some(r#"[{"id":"call-1","type":"function","function":{"name":"read_file","arguments":"{}"}}]"#),
+            "prov-1",
+            "model-1",
+            &user_msg.id,
+        )
+        .await
+        .unwrap();
+        create_tool_result_message(db, &conv.id, "call-1", "tool result", &scaffold_id)
+            .await
+            .unwrap();
+
+        let stale_version = create_message(
+            db,
+            &conv.id,
+            MessageRole::Assistant,
+            "Old inactive visible reply",
+            &[],
+            Some(&user_msg.id),
+            1,
+        )
+        .await
+        .unwrap();
+        let stale_row = messages::Entity::find_by_id(&stale_version.id)
+            .one(db)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut stale_am: messages::ActiveModel = stale_row.into();
+        stale_am.is_active = Set(0);
+        stale_am.update(db).await.unwrap();
+
+        let visible_messages = list_messages(db, &conv.id).await.unwrap();
+        assert_eq!(visible_messages.len(), 2);
+        assert!(visible_messages.iter().any(|message| message.id == visible_reply.id));
+
+        let context_messages = list_messages_for_model_context(db, &conv.id).await.unwrap();
+        let ids = context_messages
+            .iter()
+            .map(|message| message.id.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(ids.contains(&user_msg.id.as_str()));
+        assert!(ids.contains(&visible_reply.id.as_str()));
+        assert!(ids.contains(&scaffold_id.as_str()));
+        assert!(!ids.contains(&stale_version.id.as_str()));
+        assert_eq!(
+            context_messages
+                .iter()
+                .filter(|message| message.role == MessageRole::Tool)
+                .count(),
+            1
+        );
     }
 
     #[tokio::test]

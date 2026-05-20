@@ -5,6 +5,7 @@ use aqbot_providers::{
 };
 use base64::Engine;
 use sea_orm::*;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -708,6 +709,238 @@ fn chat_message_from_message(
         tool_calls,
         tool_call_id: message.tool_call_id.clone(),
     })
+}
+
+fn is_context_boundary_marker(message: &Message) -> bool {
+    message.role == MessageRole::System
+        && (message.content == "<!-- context-clear -->"
+            || message.content == crate::context_manager::COMPRESSION_MARKER)
+}
+
+fn is_valid_provider_tool_call(tool_call: &ToolCall) -> bool {
+    !tool_call.id.trim().is_empty()
+        && !tool_call.call_type.trim().is_empty()
+        && !tool_call.function.name.trim().is_empty()
+}
+
+fn extract_mcp_display_tool_call_ids(content: &str) -> HashSet<String> {
+    let mut ids = HashSet::new();
+    let mut remaining = content;
+
+    while let Some(start) = remaining.find(":::mcp ") {
+        let metadata_start = start + ":::mcp ".len();
+        let after_marker = &remaining[metadata_start..];
+        let line_end = after_marker.find('\n').unwrap_or(after_marker.len());
+        let metadata = after_marker[..line_end].trim();
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(metadata) {
+            if let Some(id) = value.get("id").and_then(|id| id.as_str()) {
+                if !id.trim().is_empty() {
+                    ids.insert(id.to_string());
+                }
+            }
+        }
+        remaining = &after_marker[line_end..];
+    }
+
+    ids
+}
+
+fn visible_history_chat_message(
+    file_store: &aqbot_core::file_store::FileStore,
+    message: &Message,
+    document_attachment_reading_enabled: bool,
+    model_context_window: Option<u32>,
+    preserve_user_search_context: bool,
+) -> aqbot_core::error::Result<ChatMessage> {
+    let mut chat_message = chat_message_from_message(
+        file_store,
+        message,
+        document_attachment_reading_enabled,
+        model_context_window,
+        preserve_user_search_context,
+    )?;
+
+    if message.role == MessageRole::Assistant {
+        chat_message.reasoning_content = None;
+        chat_message.tool_calls = None;
+    }
+
+    Ok(chat_message)
+}
+
+fn complete_tool_call_group_messages(
+    file_store: &aqbot_core::file_store::FileStore,
+    assistant_message: &Message,
+    tool_messages_by_parent: &HashMap<&str, Vec<&Message>>,
+    allowed_tool_call_ids: Option<&HashSet<String>>,
+    document_attachment_reading_enabled: bool,
+    model_context_window: Option<u32>,
+) -> aqbot_core::error::Result<Option<Vec<ChatMessage>>> {
+    if assistant_message.role != MessageRole::Assistant
+        || assistant_message.version_index != -1
+        || assistant_message.is_active
+    {
+        return Ok(None);
+    }
+
+    let Some(tool_calls_json) = assistant_message.tool_calls_json.as_deref() else {
+        return Ok(None);
+    };
+    let Ok(tool_calls) = serde_json::from_str::<Vec<ToolCall>>(tool_calls_json) else {
+        return Ok(None);
+    };
+    if tool_calls.is_empty() || !tool_calls.iter().all(is_valid_provider_tool_call) {
+        return Ok(None);
+    }
+    if let Some(allowed_tool_call_ids) = allowed_tool_call_ids {
+        if allowed_tool_call_ids.is_empty()
+            || !tool_calls
+                .iter()
+                .all(|tool_call| allowed_tool_call_ids.contains(&tool_call.id))
+        {
+            return Ok(None);
+        }
+    }
+
+    let tool_messages = tool_messages_by_parent
+        .get(assistant_message.id.as_str())
+        .cloned()
+        .unwrap_or_default();
+    let tool_messages_by_call_id = tool_messages
+        .iter()
+        .filter_map(|message| message.tool_call_id.as_deref().map(|id| (id, *message)))
+        .collect::<HashMap<_, _>>();
+
+    let mut group = Vec::with_capacity(1 + tool_calls.len());
+    let mut assistant_chat_message = chat_message_from_message(
+        file_store,
+        assistant_message,
+        document_attachment_reading_enabled,
+        model_context_window,
+        false,
+    )?;
+    assistant_chat_message.tool_calls = Some(tool_calls.clone());
+    group.push(assistant_chat_message);
+
+    let mut seen_tool_call_ids = HashSet::new();
+    for tool_call in tool_calls {
+        let Some(tool_message) = tool_messages_by_call_id.get(tool_call.id.as_str()) else {
+            return Ok(None);
+        };
+        if !seen_tool_call_ids.insert(tool_call.id.clone()) {
+            return Ok(None);
+        }
+        let tool_chat_message = chat_message_from_message(
+            file_store,
+            tool_message,
+            document_attachment_reading_enabled,
+            model_context_window,
+            false,
+        )?;
+        group.push(tool_chat_message);
+    }
+
+    Ok(Some(group))
+}
+
+fn build_provider_context_messages(
+    file_store: &aqbot_core::file_store::FileStore,
+    db_messages: &[Message],
+    document_attachment_reading_enabled: bool,
+    model_context_window: Option<u32>,
+    current_user_message_id: Option<&str>,
+    stop_after_message_id: Option<&str>,
+) -> aqbot_core::error::Result<Vec<ChatMessage>> {
+    let stop_index = stop_after_message_id.and_then(|message_id| {
+        db_messages
+            .iter()
+            .position(|message| message.id == message_id)
+    });
+    let marker_search_end = stop_index.unwrap_or(db_messages.len());
+    let marker_idx = db_messages[..marker_search_end]
+        .iter()
+        .rposition(is_context_boundary_marker);
+    let effective_start = marker_idx.map(|idx| idx + 1).unwrap_or(0);
+
+    let mut tool_assistants_by_parent: HashMap<&str, Vec<&Message>> = HashMap::new();
+    let mut tool_messages_by_parent: HashMap<&str, Vec<&Message>> = HashMap::new();
+    let mut active_tool_call_ids_by_parent: HashMap<&str, HashSet<String>> = HashMap::new();
+    for message in &db_messages[effective_start..] {
+        if message.is_active && message.role == MessageRole::Assistant {
+            if let Some(parent_id) = message.parent_message_id.as_deref() {
+                let ids = extract_mcp_display_tool_call_ids(&message.content);
+                if !ids.is_empty() {
+                    active_tool_call_ids_by_parent
+                        .entry(parent_id)
+                        .or_default()
+                        .extend(ids);
+                }
+            }
+        }
+        if message.version_index != -1 || message.is_active {
+            continue;
+        }
+        match message.role {
+            MessageRole::Assistant => {
+                if let Some(parent_id) = message.parent_message_id.as_deref() {
+                    tool_assistants_by_parent
+                        .entry(parent_id)
+                        .or_default()
+                        .push(message);
+                }
+            }
+            MessageRole::Tool => {
+                if let Some(parent_id) = message.parent_message_id.as_deref() {
+                    tool_messages_by_parent
+                        .entry(parent_id)
+                        .or_default()
+                        .push(message);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut out = Vec::new();
+    for message in &db_messages[effective_start..] {
+        if is_context_boundary_marker(message) || message.status == "error" {
+            continue;
+        }
+        if !message.is_active || message.role == MessageRole::Tool {
+            continue;
+        }
+
+        out.push(visible_history_chat_message(
+            file_store,
+            message,
+            document_attachment_reading_enabled,
+            model_context_window,
+            current_user_message_id == Some(message.id.as_str()),
+        )?);
+
+        if stop_after_message_id == Some(message.id.as_str()) {
+            break;
+        }
+
+        if message.role == MessageRole::User {
+            if let Some(tool_assistants) = tool_assistants_by_parent.get(message.id.as_str()) {
+                for assistant_message in tool_assistants {
+                    if let Some(group) = complete_tool_call_group_messages(
+                        file_store,
+                        assistant_message,
+                        &tool_messages_by_parent,
+                        active_tool_call_ids_by_parent.get(message.id.as_str()),
+                        document_attachment_reading_enabled,
+                        model_context_window,
+                    )? {
+                        out.extend(group);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(out)
 }
 
 fn split_auto_compression_history(
@@ -2834,9 +3067,10 @@ pub async fn send_message(
     let document_attachment_reading_enabled = global_settings.document_attachment_reading_enabled;
 
     // 4. Build ChatRequest from conversation messages
-    let db_messages = aqbot_core::repo::message::list_messages(&state.sea_db, &conversation_id)
-        .await
-        .map_err(|e| e.to_string())?;
+    let db_messages =
+        aqbot_core::repo::message::list_messages_for_model_context(&state.sea_db, &conversation_id)
+            .await
+            .map_err(|e| e.to_string())?;
     let file_store = aqbot_core::file_store::FileStore::new();
 
     let mut chat_messages: Vec<ChatMessage> = Vec::new();
@@ -2925,49 +3159,18 @@ pub async fn send_message(
         });
     }
 
-    // Find last context-clear or context-compressed marker to truncate history
-    let marker_idx = db_messages.iter().rposition(|m| {
-        m.role == MessageRole::System
-            && (m.content == "<!-- context-clear -->"
-                || m.content == crate::context_manager::COMPRESSION_MARKER)
-    });
-    let effective_messages = match marker_idx {
-        Some(idx) => &db_messages[idx + 1..],
-        None => &db_messages[..],
-    };
-
-    let mut history_messages: Vec<ChatMessage> = Vec::new();
-    let mut current_user_history_index: Option<usize> = None;
-    for m in effective_messages {
-        if m.role == MessageRole::System
-            && (m.content == "<!-- context-clear -->"
-                || m.content == crate::context_manager::COMPRESSION_MARKER)
-        {
-            continue;
-        }
-        if m.role == MessageRole::Tool {
-            continue;
-        }
-        if m.role == MessageRole::Assistant && m.tool_calls_json.is_some() {
-            continue;
-        }
-        // Skip error messages — they should not be sent as context
-        if m.status == "error" {
-            continue;
-        }
-        let chat_message = chat_message_from_message(
-            &file_store,
-            m,
-            document_attachment_reading_enabled,
-            model_context_window,
-            m.id == user_message.id,
-        )
-        .map_err(|e| e.to_string())?;
-        if m.id == user_message.id {
-            current_user_history_index = Some(history_messages.len());
-        }
-        history_messages.push(chat_message);
-    }
+    let history_messages = build_provider_context_messages(
+        &file_store,
+        &db_messages,
+        document_attachment_reading_enabled,
+        model_context_window,
+        Some(&user_message.id),
+        None,
+    )
+    .map_err(|e| e.to_string())?;
+    let current_user_history_index = history_messages
+        .iter()
+        .rposition(|message| message.role == "user");
 
     // Resolve proxy config early (needed for both summary generation and main request)
     let resolved_proxy = ProviderProxyConfig::resolve(&provider.proxy_config, &global_settings);
@@ -3259,7 +3462,7 @@ pub async fn regenerate_message(
 
     // 6. Rebuild chat messages (active messages only — old inactive versions excluded)
     let remaining_messages =
-        aqbot_core::repo::message::list_messages(&state.sea_db, &conversation_id)
+        aqbot_core::repo::message::list_messages_for_model_context(&state.sea_db, &conversation_id)
             .await
             .map_err(|e| e.to_string())?;
     let file_store = aqbot_core::file_store::FileStore::new();
@@ -3333,51 +3536,17 @@ pub async fn regenerate_message(
         tag
     };
 
-    // Find the target user message position, then search for context-clear/compressed BEFORE it
-    let target_pos = remaining_messages
-        .iter()
-        .position(|m| m.id == last_user_msg.id);
-    let search_range = match target_pos {
-        Some(pos) => &remaining_messages[..pos],
-        None => &remaining_messages[..],
-    };
-    let clear_idx = search_range.iter().rposition(|m| {
-        m.role == MessageRole::System
-            && (m.content == "<!-- context-clear -->"
-                || m.content == crate::context_manager::COMPRESSION_MARKER)
-    });
-    let effective_messages = match clear_idx {
-        Some(idx) => &remaining_messages[idx + 1..],
-        None => &remaining_messages[..],
-    };
-
-    for m in effective_messages {
-        if m.role == MessageRole::System
-            && (m.content == "<!-- context-clear -->"
-                || m.content == crate::context_manager::COMPRESSION_MARKER)
-        {
-            continue;
-        }
-        // Skip error messages — they should not be sent as context
-        if m.status == "error" {
-            continue;
-        }
-        // Include messages up to and including the last user message
-        chat_messages.push(
-            chat_message_from_message(
-                &file_store,
-                m,
-                document_attachment_reading_enabled,
-                model_context_window,
-                m.id == last_user_msg.id,
-            )
-            .map_err(|e| e.to_string())?,
-        );
-        // Stop after the user message we're regenerating from
-        if m.id == last_user_msg.id {
-            break;
-        }
-    }
+    chat_messages.extend(
+        build_provider_context_messages(
+            &file_store,
+            &remaining_messages,
+            document_attachment_reading_enabled,
+            model_context_window,
+            Some(&last_user_msg.id),
+            Some(&last_user_msg.id),
+        )
+        .map_err(|e| e.to_string())?,
+    );
 
     let resolved_proxy = ProviderProxyConfig::resolve(&provider.proxy_config, &global_settings);
 
@@ -3575,7 +3744,7 @@ pub async fn regenerate_with_model(
 
     // Build context messages (same logic as regenerate_message)
     let remaining_messages =
-        aqbot_core::repo::message::list_messages(&state.sea_db, &conversation_id)
+        aqbot_core::repo::message::list_messages_for_model_context(&state.sea_db, &conversation_id)
             .await
             .map_err(|e| e.to_string())?;
     let file_store = aqbot_core::file_store::FileStore::new();
@@ -3659,46 +3828,17 @@ pub async fn regenerate_with_model(
         tag
     };
 
-    // Context building with context-clear/compressed handling
-    let target_pos = remaining_messages.iter().position(|m| m.id == user_msg.id);
-    let search_range = match target_pos {
-        Some(pos) => &remaining_messages[..pos],
-        None => &remaining_messages[..],
-    };
-    let clear_idx = search_range.iter().rposition(|m| {
-        m.role == MessageRole::System
-            && (m.content == "<!-- context-clear -->"
-                || m.content == crate::context_manager::COMPRESSION_MARKER)
-    });
-    let effective_messages = match clear_idx {
-        Some(idx) => &remaining_messages[idx + 1..],
-        None => &remaining_messages[..],
-    };
-    for m in effective_messages {
-        if m.role == MessageRole::System
-            && (m.content == "<!-- context-clear -->"
-                || m.content == crate::context_manager::COMPRESSION_MARKER)
-        {
-            continue;
-        }
-        // Skip error messages — they should not be sent as context
-        if m.status == "error" {
-            continue;
-        }
-        chat_messages.push(
-            chat_message_from_message(
-                &file_store,
-                m,
-                document_attachment_reading_enabled,
-                model_context_window,
-                m.id == user_msg.id,
-            )
-            .map_err(|e| e.to_string())?,
-        );
-        if m.id == user_msg.id {
-            break;
-        }
-    }
+    chat_messages.extend(
+        build_provider_context_messages(
+            &file_store,
+            &remaining_messages,
+            document_attachment_reading_enabled,
+            model_context_window,
+            Some(&user_msg.id),
+            Some(&user_msg.id),
+        )
+        .map_err(|e| e.to_string())?,
+    );
 
     let resolved_proxy = ProviderProxyConfig::resolve(&provider.proxy_config, &global_settings);
 
@@ -4087,57 +4227,42 @@ pub async fn compress_context(
     let resolved_proxy = ProviderProxyConfig::resolve(&provider.proxy_config, &global_settings);
 
     // Load messages after last marker
-    let db_messages = aqbot_core::repo::message::list_messages(&state.sea_db, &conversation_id)
-        .await
-        .map_err(|e| e.to_string())?;
+    let db_messages =
+        aqbot_core::repo::message::list_messages_for_model_context(&state.sea_db, &conversation_id)
+            .await
+            .map_err(|e| e.to_string())?;
 
     let file_store = aqbot_core::file_store::FileStore::new();
 
     // For manual compression: try messages after last marker first,
     // fall back to ALL messages if nothing after marker
-    let marker_idx = db_messages.iter().rposition(|m| {
-        m.role == MessageRole::System
-            && (m.content == "<!-- context-clear -->"
-                || m.content == crate::context_manager::COMPRESSION_MARKER)
-    });
-
-    let collect_messages = |msgs: &[Message]| -> Result<Vec<ChatMessage>, String> {
-        let mut out = Vec::new();
-        for m in msgs {
-            if m.role == MessageRole::System
-                && (m.content == "<!-- context-clear -->"
-                    || m.content == crate::context_manager::COMPRESSION_MARKER)
-            {
-                continue;
-            }
-            if m.role == MessageRole::Tool {
-                continue;
-            }
-            if m.role == MessageRole::Assistant && m.tool_calls_json.is_some() {
-                continue;
-            }
-            out.push(
-                chat_message_from_message(
-                    &file_store,
-                    m,
-                    global_settings.document_attachment_reading_enabled,
-                    None,
-                    false,
-                )
-                .map_err(|e| e.to_string())?,
-            );
-        }
-        Ok(out)
-    };
-
-    let mut history_messages = match marker_idx {
-        Some(idx) => collect_messages(&db_messages[idx + 1..])?,
-        None => collect_messages(&db_messages)?,
-    };
+    let marker_idx = db_messages.iter().rposition(is_context_boundary_marker);
+    let mut history_messages = build_provider_context_messages(
+        &file_store,
+        &db_messages,
+        global_settings.document_attachment_reading_enabled,
+        None,
+        None,
+        None,
+    )
+    .map_err(|e| e.to_string())?;
 
     // If nothing after the last marker, try all messages
     if history_messages.is_empty() && marker_idx.is_some() {
-        history_messages = collect_messages(&db_messages)?;
+        let all_without_markers = db_messages
+            .iter()
+            .filter(|message| !is_context_boundary_marker(message))
+            .cloned()
+            .collect::<Vec<_>>();
+        history_messages = build_provider_context_messages(
+            &file_store,
+            &all_without_markers,
+            global_settings.document_attachment_reading_enabled,
+            None,
+            None,
+            None,
+        )
+        .map_err(|e| e.to_string())?;
     }
 
     if history_messages.is_empty() {
@@ -4342,6 +4467,40 @@ mod tests {
         archive.finish().unwrap().into_inner()
     }
 
+    fn test_message(
+        id: &str,
+        role: MessageRole,
+        content: &str,
+        parent_message_id: Option<&str>,
+        version_index: i32,
+        is_active: bool,
+        tool_calls_json: Option<&str>,
+        tool_call_id: Option<&str>,
+    ) -> Message {
+        Message {
+            id: id.to_string(),
+            conversation_id: "conv-1".into(),
+            role,
+            content: content.to_string(),
+            provider_id: None,
+            model_id: None,
+            token_count: None,
+            prompt_tokens: None,
+            completion_tokens: None,
+            tokens_per_second: None,
+            first_token_latency_ms: None,
+            attachments: Vec::new(),
+            thinking: None,
+            tool_calls_json: tool_calls_json.map(str::to_string),
+            tool_call_id: tool_call_id.map(str::to_string),
+            created_at: 0,
+            parent_message_id: parent_message_id.map(str::to_string),
+            version_index,
+            is_active,
+            status: "complete".into(),
+        }
+    }
+
     #[tokio::test]
     async fn rag_context_timeout_returns_failure_errors() {
         let result = collect_rag_context_with_timeout(
@@ -4459,6 +4618,271 @@ mod tests {
 
         assert_eq!(serialized["content"], "final answer");
         assert_eq!(serialized["reasoning_content"], "hidden thinking");
+    }
+
+    #[test]
+    fn provider_context_reconstructs_complete_tool_call_groups() {
+        let file_store = aqbot_core::file_store::FileStore::new();
+        let messages = vec![
+            test_message(
+                "user-1",
+                MessageRole::User,
+                "please read",
+                None,
+                0,
+                true,
+                None,
+                None,
+            ),
+            test_message(
+                "tool-assistant-1",
+                MessageRole::Assistant,
+                "<think totalMs=\"3\">need file</think>",
+                Some("user-1"),
+                -1,
+                false,
+                Some(
+                    r#"[{"id":"call-1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"a.txt\"}"}}]"#,
+                ),
+                None,
+            ),
+            test_message(
+                "tool-1",
+                MessageRole::Tool,
+                "file content",
+                Some("tool-assistant-1"),
+                -1,
+                false,
+                None,
+                Some("call-1"),
+            ),
+            test_message(
+                "assistant-1",
+                MessageRole::Assistant,
+                "<think totalMs=\"7\">final thinking</think>\n\n:::mcp {\"id\":\"call-1\",\"tool\":\"read_file\"}\nfile content\n:::\n\nread done",
+                Some("user-1"),
+                0,
+                true,
+                None,
+                None,
+            ),
+            test_message(
+                "user-2",
+                MessageRole::User,
+                "next question",
+                None,
+                0,
+                true,
+                None,
+                None,
+            ),
+        ];
+
+        let context = build_provider_context_messages(
+            &file_store,
+            &messages,
+            false,
+            None,
+            Some("user-2"),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            context
+                .iter()
+                .map(|message| message.role.as_str())
+                .collect::<Vec<_>>(),
+            vec!["user", "assistant", "tool", "assistant", "user"]
+        );
+        assert_eq!(context[1].reasoning_content.as_deref(), Some("need file"));
+        assert_eq!(context[1].tool_calls.as_ref().unwrap()[0].id, "call-1");
+        assert_eq!(context[2].tool_call_id.as_deref(), Some("call-1"));
+        assert_eq!(context[3].reasoning_content, None);
+    }
+
+    #[test]
+    fn provider_context_ignores_stale_tool_scaffolding_from_inactive_versions() {
+        let file_store = aqbot_core::file_store::FileStore::new();
+        let messages = vec![
+            test_message(
+                "user-1",
+                MessageRole::User,
+                "please read",
+                None,
+                0,
+                true,
+                None,
+                None,
+            ),
+            test_message(
+                "old-tool-assistant",
+                MessageRole::Assistant,
+                "<think>old tool</think>",
+                Some("user-1"),
+                -1,
+                false,
+                Some(
+                    r#"[{"id":"call-old","type":"function","function":{"name":"read_file","arguments":"{}"}}]"#,
+                ),
+                None,
+            ),
+            test_message(
+                "old-tool",
+                MessageRole::Tool,
+                "old file content",
+                Some("old-tool-assistant"),
+                -1,
+                false,
+                None,
+                Some("call-old"),
+            ),
+            test_message(
+                "new-tool-assistant",
+                MessageRole::Assistant,
+                "<think>new tool</think>",
+                Some("user-1"),
+                -1,
+                false,
+                Some(
+                    r#"[{"id":"call-new","type":"function","function":{"name":"read_file","arguments":"{}"}}]"#,
+                ),
+                None,
+            ),
+            test_message(
+                "new-tool",
+                MessageRole::Tool,
+                "new file content",
+                Some("new-tool-assistant"),
+                -1,
+                false,
+                None,
+                Some("call-new"),
+            ),
+            test_message(
+                "assistant-1",
+                MessageRole::Assistant,
+                ":::mcp {\"id\":\"call-new\",\"tool\":\"read_file\"}\nnew file content\n:::\n\nread done",
+                Some("user-1"),
+                0,
+                true,
+                None,
+                None,
+            ),
+            test_message(
+                "user-2",
+                MessageRole::User,
+                "next question",
+                None,
+                0,
+                true,
+                None,
+                None,
+            ),
+        ];
+
+        let context = build_provider_context_messages(
+            &file_store,
+            &messages,
+            false,
+            None,
+            Some("user-2"),
+            None,
+        )
+        .unwrap();
+        let tool_call_ids = context
+            .iter()
+            .filter_map(|message| message.tool_calls.as_ref())
+            .flat_map(|tool_calls| tool_calls.iter().map(|tool_call| tool_call.id.as_str()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(tool_call_ids, vec!["call-new"]);
+        assert!(!context.iter().any(|message| {
+            matches!(&message.content, ChatContent::Text(content) if content.contains("old file content"))
+        }));
+    }
+
+    #[test]
+    fn provider_context_downgrades_malformed_tool_call_groups() {
+        let file_store = aqbot_core::file_store::FileStore::new();
+        let messages = vec![
+            test_message(
+                "user-1",
+                MessageRole::User,
+                "please read",
+                None,
+                0,
+                true,
+                None,
+                None,
+            ),
+            test_message(
+                "tool-assistant-1",
+                MessageRole::Assistant,
+                "<think totalMs=\"3\">need file</think>",
+                Some("user-1"),
+                -1,
+                false,
+                Some(
+                    r#"[{"id":"","type":"function","function":{"name":"read_file","arguments":"{}"}}]"#,
+                ),
+                None,
+            ),
+            test_message(
+                "tool-1",
+                MessageRole::Tool,
+                "file content",
+                Some("tool-assistant-1"),
+                -1,
+                false,
+                None,
+                Some("call-1"),
+            ),
+            test_message(
+                "assistant-1",
+                MessageRole::Assistant,
+                "<think totalMs=\"7\">final thinking</think>\n\nread done",
+                Some("user-1"),
+                0,
+                true,
+                None,
+                None,
+            ),
+            test_message(
+                "user-2",
+                MessageRole::User,
+                "next question",
+                None,
+                0,
+                true,
+                None,
+                None,
+            ),
+        ];
+
+        let context = build_provider_context_messages(
+            &file_store,
+            &messages,
+            false,
+            None,
+            Some("user-2"),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            context
+                .iter()
+                .map(|message| message.role.as_str())
+                .collect::<Vec<_>>(),
+            vec!["user", "assistant", "user"]
+        );
+        assert!(context.iter().all(|message| message.tool_calls.is_none()));
+        assert!(context.iter().all(|message| message.tool_call_id.is_none()));
+        assert!(context
+            .iter()
+            .filter(|message| message.role == "assistant")
+            .all(|message| message.reasoning_content.is_none()));
     }
 
     #[test]

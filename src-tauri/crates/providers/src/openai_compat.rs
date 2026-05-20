@@ -342,6 +342,7 @@ struct OpenAIUsage {
 
 #[derive(Deserialize, Debug, Clone)]
 struct OpenAIToolCallDelta {
+    #[serde(default)]
     index: usize,
     id: Option<String>,
     #[serde(rename = "type")]
@@ -435,6 +436,132 @@ fn extract_text_content(content: &ChatContent) -> String {
     }
 }
 
+fn is_valid_outbound_tool_call(tc: &ToolCall) -> bool {
+    !tc.id.trim().is_empty()
+        && !tc.call_type.trim().is_empty()
+        && !tc.function.name.trim().is_empty()
+}
+
+fn serialize_tool_calls(tool_calls: Option<&[ToolCall]>) -> Option<Vec<serde_json::Value>> {
+    let tool_calls = tool_calls?;
+    if tool_calls.is_empty() || !tool_calls.iter().all(is_valid_outbound_tool_call) {
+        return None;
+    }
+
+    Some(
+        tool_calls
+            .iter()
+            .map(|tc| {
+                serde_json::json!({
+                    "id": tc.id,
+                    "type": tc.call_type,
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments
+                    }
+                })
+            })
+            .collect(),
+    )
+}
+
+fn local_tool_call_id(response_id: Option<&str>, index: usize) -> String {
+    let prefix = response_id
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(|id| {
+            id.chars()
+                .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
+                .take(48)
+                .collect::<String>()
+        })
+        .filter(|id| !id.is_empty());
+
+    match prefix {
+        Some(prefix) => format!("call_aqbot_{prefix}_{index}"),
+        None => format!("call_aqbot_{index}"),
+    }
+}
+
+fn normalize_response_tool_call_id(id: Option<&str>, response_id: Option<&str>, index: usize) -> String {
+    id.map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| local_tool_call_id(response_id, index))
+}
+
+fn normalize_response_tool_calls(
+    tool_calls: &[OpenAIToolCallDelta],
+    response_id: Option<&str>,
+) -> Result<Vec<ToolCall>> {
+    tool_calls
+        .iter()
+        .enumerate()
+        .map(|(fallback_index, tc)| {
+            let index = tc.index.max(fallback_index);
+            let function = tc.function.as_ref().ok_or_else(|| {
+                AQBotError::Provider("Tool call response missing function payload".into())
+            })?;
+            let name = function
+                .name
+                .as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .ok_or_else(|| {
+                    AQBotError::Provider("Tool call response missing function.name".into())
+                })?;
+            let call_type = tc
+                .call_type
+                .as_deref()
+                .map(str::trim)
+                .filter(|call_type| !call_type.is_empty())
+                .unwrap_or("function");
+
+            Ok(ToolCall {
+                id: normalize_response_tool_call_id(tc.id.as_deref(), response_id, index),
+                call_type: call_type.to_string(),
+                function: ToolCallFunction {
+                    name: name.to_string(),
+                    arguments: function.arguments.clone().unwrap_or_default(),
+                },
+            })
+        })
+        .collect()
+}
+
+fn normalize_stream_tool_calls(
+    pending_tool_calls: &[(String, String, String, String)],
+) -> Result<Option<Vec<ToolCall>>> {
+    if pending_tool_calls.is_empty() {
+        return Ok(None);
+    }
+
+    let mut tool_calls = Vec::with_capacity(pending_tool_calls.len());
+    for (index, (id, call_type, name, arguments)) in pending_tool_calls.iter().enumerate() {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(AQBotError::Provider(
+                "Tool call stream missing function.name".into(),
+            ));
+        }
+        let call_type = call_type.trim();
+        tool_calls.push(ToolCall {
+            id: normalize_response_tool_call_id(Some(id), None, index),
+            call_type: if call_type.is_empty() {
+                "function".to_string()
+            } else {
+                call_type.to_string()
+            },
+            function: ToolCallFunction {
+                name: name.to_string(),
+                arguments: arguments.clone(),
+            },
+        });
+    }
+
+    Ok(Some(tool_calls))
+}
+
 fn convert_messages(
     messages: &[ChatMessage],
     include_reasoning_content: bool,
@@ -442,7 +569,14 @@ fn convert_messages(
     messages
         .iter()
         .map(|msg| {
-            let include_reasoning = msg.role == "assistant" && include_reasoning_content;
+            let serialized_tool_calls = if msg.role == "assistant" {
+                serialize_tool_calls(msg.tool_calls.as_deref())
+            } else {
+                None
+            };
+            let include_reasoning = msg.role == "assistant"
+                && include_reasoning_content
+                && serialized_tool_calls.is_some();
             let reasoning_content = if include_reasoning {
                 msg.reasoning_content.clone()
             } else {
@@ -457,7 +591,7 @@ fn convert_messages(
                     tool_calls: None,
                     tool_call_id: msg.tool_call_id.clone(),
                 },
-                "assistant" if msg.tool_calls.is_some() => {
+                "assistant" if serialized_tool_calls.is_some() => {
                     let content_text = extract_text_content(&msg.content);
                     let content = if content_text.is_empty() {
                         None
@@ -492,13 +626,7 @@ fn convert_messages(
                         role: "assistant".to_string(),
                         content,
                         reasoning_content,
-                        tool_calls: msg.tool_calls.as_ref().map(|tcs| {
-                            tcs.iter().map(|tc| serde_json::json!({
-                                "id": tc.id,
-                                "type": tc.call_type,
-                                "function": { "name": tc.function.name, "arguments": tc.function.arguments }
-                            })).collect()
-                        }),
+                        tool_calls: serialized_tool_calls,
                         tool_call_id: None,
                     }
                 },
@@ -857,7 +985,7 @@ mod tests {
     }
 
     #[test]
-    fn deepseek_thinking_serializes_assistant_reasoning_content() {
+    fn deepseek_plain_assistant_reasoning_content_is_not_replayed() {
         let assistant: ChatMessage = serde_json::from_value(json!({
             "role": "assistant",
             "content": "final answer",
@@ -872,10 +1000,8 @@ mod tests {
         let body = build_request(&DeepSeekPolicy, &request, &request.messages, true);
         let serialized = serde_json::to_value(body).expect("request json");
 
-        assert_eq!(
-            serialized["messages"][0]["reasoning_content"],
-            json!("hidden thinking")
-        );
+        assert!(serialized["messages"][0].get("reasoning_content").is_none());
+        assert!(serialized["messages"][0].get("tool_calls").is_none());
     }
 
     #[test]
@@ -905,6 +1031,90 @@ mod tests {
             serialized["messages"][0]["reasoning_content"],
             json!("hidden thinking")
         );
+        assert_eq!(serialized["messages"][0]["tool_calls"][0]["id"], json!("call-1"));
+    }
+
+    #[test]
+    fn deepseek_malformed_tool_call_does_not_replay_tool_calls_or_reasoning() {
+        let assistant = ChatMessage {
+            role: "assistant".to_string(),
+            content: ChatContent::Text("visible answer".to_string()),
+            reasoning_content: Some("hidden thinking".to_string()),
+            tool_calls: Some(vec![aqbot_core::types::ToolCall {
+                id: String::new(),
+                call_type: "function".to_string(),
+                function: aqbot_core::types::ToolCallFunction {
+                    name: "write_file".to_string(),
+                    arguments: "{\"path\":\"index.html\"}".to_string(),
+                },
+            }]),
+            tool_call_id: None,
+        };
+        let mut request = base_chat_request("deepseek-v4-pro");
+        request.tools = Some(vec![dummy_tool()]);
+        request.messages = vec![assistant];
+
+        let body = build_request(&DeepSeekPolicy, &request, &request.messages, true);
+        let serialized = serde_json::to_value(body).expect("request json");
+
+        assert_eq!(serialized["messages"][0]["content"], json!("visible answer"));
+        assert!(serialized["messages"][0].get("reasoning_content").is_none());
+        assert!(serialized["messages"][0].get("tool_calls").is_none());
+    }
+
+    #[test]
+    fn stream_tool_call_delta_missing_id_gets_local_id() {
+        let tool_calls = normalize_stream_tool_calls(&[(
+            String::new(),
+            "function".into(),
+            "read_file".into(),
+            "{\"path\":\"a.txt\"}".into(),
+        )])
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(tool_calls[0].id, "call_aqbot_0");
+        assert_eq!(tool_calls[0].function.name, "read_file");
+    }
+
+    #[test]
+    fn response_tool_call_missing_id_gets_response_scoped_local_id() {
+        let response: OpenAIResponse = serde_json::from_value(json!({
+            "id": "resp-abc",
+            "choices": [{
+                "message": {
+                    "tool_calls": [{
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": "{}"
+                        }
+                    }]
+                }
+            }]
+        }))
+        .expect("response");
+        let message = response.choices[0].message.as_ref().unwrap();
+
+        let tool_calls =
+            normalize_response_tool_calls(message.tool_calls.as_ref().unwrap(), response.id.as_deref())
+                .unwrap();
+
+        assert_eq!(tool_calls[0].id, "call_aqbot_resp-abc_0");
+        assert_eq!(tool_calls[0].function.name, "read_file");
+    }
+
+    #[test]
+    fn stream_tool_call_delta_missing_name_returns_local_error() {
+        let err = normalize_stream_tool_calls(&[(
+            String::new(),
+            "function".into(),
+            String::new(),
+            "{}".into(),
+        )])
+        .unwrap_err();
+
+        assert!(err.to_string().contains("function.name"));
     }
 
     #[test]
@@ -1104,29 +1314,15 @@ where
                 total_tokens: 0,
             });
 
-        let tool_calls = msg.tool_calls.as_ref().map(|tcs| {
-            tcs.iter()
-                .map(|tc| aqbot_core::types::ToolCall {
-                    id: tc.id.clone().unwrap_or_default(),
-                    call_type: tc.call_type.clone().unwrap_or_else(|| "function".into()),
-                    function: aqbot_core::types::ToolCallFunction {
-                        name: tc
-                            .function
-                            .as_ref()
-                            .and_then(|f| f.name.clone())
-                            .unwrap_or_default(),
-                        arguments: tc
-                            .function
-                            .as_ref()
-                            .and_then(|f| f.arguments.clone())
-                            .unwrap_or_default(),
-                    },
-                })
-                .collect()
-        });
+        let response_id = oai.id.clone();
+        let tool_calls = msg
+            .tool_calls
+            .as_ref()
+            .map(|tcs| normalize_response_tool_calls(tcs, response_id.as_deref()))
+            .transpose()?;
 
         Ok(ChatResponse {
-            id: oai.id.unwrap_or_default(),
+            id: response_id.unwrap_or_default(),
             model: oai.model.unwrap_or_else(|| request.model.clone()),
             content: extract_primary_content(&msg.content, &msg.extra).unwrap_or_default(),
             thinking: extract_thinking(
@@ -1187,22 +1383,12 @@ where
 
             let mut process_event = |data: &str| -> bool {
                 if data.trim() == "[DONE]" {
-                    let tool_calls = if pending_tool_calls.is_empty() {
-                        None
-                    } else {
-                        Some(
-                            pending_tool_calls
-                                .iter()
-                                .map(|(id, ct, name, args)| aqbot_core::types::ToolCall {
-                                    id: id.clone(),
-                                    call_type: ct.clone(),
-                                    function: aqbot_core::types::ToolCallFunction {
-                                        name: name.clone(),
-                                        arguments: args.clone(),
-                                    },
-                                })
-                                .collect(),
-                        )
+                    let tool_calls = match normalize_stream_tool_calls(&pending_tool_calls) {
+                        Ok(tool_calls) => tool_calls,
+                        Err(err) => {
+                            let _ = tx.unbounded_send(Err(err));
+                            return true;
+                        }
                     };
                     let _ = tx.unbounded_send(Ok(ChatStreamChunk {
                         content: None,

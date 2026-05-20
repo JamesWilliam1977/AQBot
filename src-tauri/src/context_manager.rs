@@ -8,6 +8,7 @@
 
 use aqbot_core::token_counter;
 use aqbot_core::types::{ChatContent, ChatMessage};
+use std::collections::HashSet;
 
 /// Fraction of context window that triggers auto-compression (70%).
 const THRESHOLD_RATIO: f64 = 0.70;
@@ -113,22 +114,64 @@ fn sliding_window(history: &[ChatMessage], budget: usize) -> Vec<ChatMessage> {
 
     let mut total = 0usize;
     let mut start_idx = history.len();
+    let mut end_idx = history.len();
 
-    for (i, msg) in history.iter().enumerate().rev() {
-        let tokens = message_tokens(msg);
-        if total + tokens > budget {
+    while end_idx > 0 {
+        let group_start = message_group_start(history, end_idx - 1);
+        let group_tokens: usize = history[group_start..end_idx]
+            .iter()
+            .map(message_tokens)
+            .sum();
+        if total + group_tokens > budget {
             break;
         }
-        total += tokens;
-        start_idx = i;
+        total += group_tokens;
+        start_idx = group_start;
+        end_idx = group_start;
     }
 
     // Always include at least the last message
     if start_idx == history.len() {
-        start_idx = history.len() - 1;
+        start_idx = message_group_start(history, history.len() - 1);
     }
 
     history[start_idx..].to_vec()
+}
+
+fn message_group_start(history: &[ChatMessage], index: usize) -> usize {
+    let message = &history[index];
+    if message.role != "tool" {
+        return index;
+    }
+
+    let Some(tool_call_id) = message.tool_call_id.as_deref() else {
+        return index;
+    };
+    if tool_call_id.trim().is_empty() {
+        return index;
+    }
+
+    for candidate_index in (0..index).rev() {
+        let candidate = &history[candidate_index];
+        if candidate.role != "assistant" {
+            continue;
+        }
+        let tool_call_ids = candidate
+            .tool_calls
+            .as_ref()
+            .map(|tool_calls| {
+                tool_calls
+                    .iter()
+                    .map(|tool_call| tool_call.id.as_str())
+                    .collect::<HashSet<_>>()
+            })
+            .unwrap_or_default();
+        if tool_call_ids.contains(tool_call_id) {
+            return candidate_index;
+        }
+    }
+
+    index
 }
 
 /// Messages that need to be summarized (passed to LLM).
@@ -283,4 +326,52 @@ pub fn build_summary_prompt_with_custom(
     });
 
     messages
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aqbot_core::types::{ToolCall, ToolCallFunction};
+
+    fn text_message(role: &str, content: &str) -> ChatMessage {
+        ChatMessage {
+            role: role.to_string(),
+            content: ChatContent::Text(content.to_string()),
+            reasoning_content: None,
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+
+    #[test]
+    fn sliding_window_does_not_keep_orphan_tool_result_without_assistant_call() {
+        let mut assistant = text_message("assistant", "");
+        assistant.tool_calls = Some(vec![ToolCall {
+            id: "call-1".into(),
+            call_type: "function".into(),
+            function: ToolCallFunction {
+                name: "read_file".into(),
+                arguments: "{}".into(),
+            },
+        }]);
+        assistant.reasoning_content = Some("need file".into());
+
+        let mut tool = text_message("tool", "small tool result");
+        tool.tool_call_id = Some("call-1".into());
+
+        let history = vec![
+            text_message("user", &"old ".repeat(500)),
+            assistant,
+            tool,
+            text_message("user", "next"),
+        ];
+        let tool_tokens = message_tokens(&history[2]);
+        let current_user_tokens = message_tokens(&history[3]);
+        let budget = tool_tokens + current_user_tokens + 1;
+
+        let trimmed = sliding_window(&history, budget);
+
+        assert_eq!(trimmed.len(), 1);
+        assert_eq!(trimmed[0].role, "user");
+    }
 }
