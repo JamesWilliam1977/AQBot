@@ -562,6 +562,46 @@ fn normalize_stream_tool_calls(
     Ok(Some(tool_calls))
 }
 
+fn merge_stream_tool_call_delta(
+    pending_tool_calls: &mut Vec<(String, String, String, String)>,
+    tc: &OpenAIToolCallDelta,
+) {
+    let idx = tc.index;
+    while pending_tool_calls.len() <= idx {
+        pending_tool_calls.push((
+            String::new(),
+            String::from("function"),
+            String::new(),
+            String::new(),
+        ));
+    }
+
+    if let Some(id) = tc.id.as_deref().map(str::trim).filter(|id| !id.is_empty()) {
+        pending_tool_calls[idx].0 = id.to_string();
+    }
+    if let Some(call_type) = tc
+        .call_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|call_type| !call_type.is_empty())
+    {
+        pending_tool_calls[idx].1 = call_type.to_string();
+    }
+    if let Some(function) = &tc.function {
+        if let Some(name) = function
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            pending_tool_calls[idx].2 = name.to_string();
+        }
+        if let Some(args) = &function.arguments {
+            pending_tool_calls[idx].3.push_str(args);
+        }
+    }
+}
+
 fn convert_messages(
     messages: &[ChatMessage],
     include_reasoning_content: bool,
@@ -1078,6 +1118,45 @@ mod tests {
     }
 
     #[test]
+    fn stream_tool_call_delta_keeps_metadata_when_later_chunks_are_empty() {
+        let chunks: Vec<OpenAIToolCallDelta> = vec![
+            serde_json::from_value(json!({
+                "index": 0,
+                "id": "call-1",
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "arguments": "{\"path\":"
+                }
+            }))
+            .expect("initial tool call delta"),
+            serde_json::from_value(json!({
+                "index": 0,
+                "id": "",
+                "type": "",
+                "function": {
+                    "name": "",
+                    "arguments": "\"a.txt\"}"
+                }
+            }))
+            .expect("arguments delta"),
+        ];
+        let mut pending_tool_calls = Vec::new();
+
+        for chunk in chunks {
+            merge_stream_tool_call_delta(&mut pending_tool_calls, &chunk);
+        }
+        let tool_calls = normalize_stream_tool_calls(&pending_tool_calls)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(tool_calls[0].id, "call-1");
+        assert_eq!(tool_calls[0].call_type, "function");
+        assert_eq!(tool_calls[0].function.name, "read_file");
+        assert_eq!(tool_calls[0].function.arguments, "{\"path\":\"a.txt\"}");
+    }
+
+    #[test]
     fn response_tool_call_missing_id_gets_response_scoped_local_id() {
         let response: OpenAIResponse = serde_json::from_value(json!({
             "id": "resp-abc",
@@ -1416,32 +1495,10 @@ where
                                 .message
                                 .as_ref()
                                 .and_then(|message| message.tool_calls.as_ref())
-                        });
+                    });
                     if let Some(tc_deltas) = tool_call_deltas {
                         for tc in tc_deltas {
-                            let idx = tc.index;
-                            while pending_tool_calls.len() <= idx {
-                                pending_tool_calls.push((
-                                    String::new(),
-                                    String::from("function"),
-                                    String::new(),
-                                    String::new(),
-                                ));
-                            }
-                            if let Some(ref id) = tc.id {
-                                pending_tool_calls[idx].0 = id.clone();
-                            }
-                            if let Some(ref ct) = tc.call_type {
-                                pending_tool_calls[idx].1 = ct.clone();
-                            }
-                            if let Some(ref f) = tc.function {
-                                if let Some(ref name) = f.name {
-                                    pending_tool_calls[idx].2 = name.clone();
-                                }
-                                if let Some(ref args) = f.arguments {
-                                    pending_tool_calls[idx].3.push_str(args);
-                                }
-                            }
+                            merge_stream_tool_call_delta(&mut pending_tool_calls, tc);
                         }
                     }
 
