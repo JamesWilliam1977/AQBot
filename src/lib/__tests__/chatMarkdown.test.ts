@@ -66,6 +66,44 @@ UI -> App: 携带token访问
     expect(String(nodes[0].code)).toContain('<think>literal</think>');
   });
 
+  it('parses html-render tags as custom render nodes', () => {
+    const nodes = parseChatMarkdown('<html-render><div class="card">ok</div></html-render>');
+
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0]).toMatchObject({
+      type: 'html-render',
+      content: '<div class="card">ok</div>',
+    });
+  });
+
+  it('does not parse html-render tags inside fenced code blocks', () => {
+    const nodes = parseChatMarkdown('```html\n<html-render><div>literal</div></html-render>\n```');
+
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0]).toMatchObject({
+      type: 'code_block',
+    });
+    expect(String(nodes[0].code)).toContain('<html-render><div>literal</div></html-render>');
+  });
+
+  it('parses completed html-render comment markers as custom render nodes', () => {
+    const nodes = parseChatMarkdown('<!-- html-render-start --><section>legacy</section><!-- html-render-end -->');
+
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0]).toMatchObject({
+      type: 'html-render',
+      content: '<section>legacy</section>',
+    });
+  });
+
+  it('falls incomplete final html-render tags back to source text', () => {
+    const nodes = parseChatMarkdown('<html-render><div>draft');
+    const serialized = JSON.stringify(nodes);
+
+    expect(nodes.some((node) => node.type === 'html-render')).toBe(false);
+    expect(serialized).toContain('<html-render><div>draft');
+  });
+
   it('strips think and aqbot-only tags when preparing export-safe transcript text', () => {
     const cleaned = stripAqbotTags(`Final answer
 <think>Hidden reasoning</think>
@@ -78,5 +116,11 @@ payload
 Visible tail`);
 
     expect(cleaned).toBe('Final answer\nVisible tail');
+  });
+
+  it('keeps user-visible html-render content in export-safe transcript text', () => {
+    const content = '<html-render><div>visible html</div></html-render>';
+
+    expect(stripAqbotTags(content)).toBe(content);
   });
 });

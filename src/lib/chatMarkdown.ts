@@ -1,9 +1,10 @@
 import { getMarkdown, parseMarkdownToStructure, type BaseNode } from 'stream-markdown-parser';
+import { normalizeHtmlRenderContent } from './chatHtmlRender';
 import { normalizeThinkTagsForMarkdown } from './thinkTags';
 
 export type ChatMarkdownNode = BaseNode;
 
-export const CHAT_CUSTOM_HTML_TAGS = ['think', 'web-search-query', 'web-search', 'knowledge-retrieval', 'memory-retrieval', 'tool-call', 'img'] as const;
+export const CHAT_CUSTOM_HTML_TAGS = ['think', 'web-search-query', 'web-search', 'knowledge-retrieval', 'memory-retrieval', 'tool-call', 'html-render', 'img'] as const;
 
 /**
  * Strip all aqbot-injected custom tags (with `data-aqbot="1"` attribute) and
@@ -26,8 +27,20 @@ const chatMarkdown = getMarkdown('aqbot-chat', {
   customHtmlTags: CHAT_CUSTOM_HTML_TAGS,
 });
 
-export function parseChatMarkdown(content: string): ChatMarkdownNode[] {
-  return parseMarkdownToStructure(normalizeThinkTagsForMarkdown(content), chatMarkdown, {
-    customHtmlTags: [...CHAT_CUSTOM_HTML_TAGS],
+function unwrapStandaloneHtmlRenderNodes(nodes: ChatMarkdownNode[]) {
+  return nodes.map((node) => {
+    const children = (node as { children?: ChatMarkdownNode[] }).children;
+    if (node.type === 'paragraph' && children?.length === 1 && children[0]?.type === 'html-render') {
+      return children[0];
+    }
+    return node;
   });
+}
+
+export function parseChatMarkdown(content: string): ChatMarkdownNode[] {
+  const nodes = parseMarkdownToStructure(normalizeHtmlRenderContent(normalizeThinkTagsForMarkdown(content), { final: true }), chatMarkdown, {
+    customHtmlTags: [...CHAT_CUSTOM_HTML_TAGS],
+    final: true,
+  });
+  return unwrapStandaloneHtmlRenderNodes(nodes);
 }

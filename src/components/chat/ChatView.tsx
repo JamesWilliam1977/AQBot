@@ -12,7 +12,7 @@ import Actions from '@ant-design/x/es/actions';
 import Think from '@ant-design/x/es/think';
 import type { BubbleItemType, BubbleListRef, RoleType } from '@ant-design/x/es/bubble/interface';
 import type { PromptsItemType } from '@ant-design/x/es/prompts';
-import NodeRenderer, { setCustomComponents, type NodeComponentProps, type CodeBlockActionContext, type CodeBlockPreviewPayload, type MermaidBlockActionContext, type InfographicBlockActionContext } from 'markstream-react';
+import NodeRenderer, { setCustomComponents, withMarkstreamComponentDisplay, type NodeComponentProps, type CodeBlockActionContext, type CodeBlockPreviewPayload, type MermaidBlockActionContext, type InfographicBlockActionContext } from 'markstream-react';
 import { useTranslation } from 'react-i18next';
 import { CodeBlockHeaderActions } from './CodeBlockHeaderActions';
 import { CodeBlockPreviewModal } from './CodeBlockPreviewModal';
@@ -28,6 +28,7 @@ import { InputArea } from './InputArea';
 import { ModelSelector } from './ModelSelector';
 import { parseSearchContent } from '@/lib/searchUtils';
 import { CHAT_CUSTOM_HTML_TAGS, parseChatMarkdown, stripAqbotTags, type ChatMarkdownNode } from '@/lib/chatMarkdown';
+import { normalizeHtmlRenderContent } from '@/lib/chatHtmlRender';
 import { normalizeThinkTagsForMarkdown } from '@/lib/thinkTags';
 import {
   getMessageVersionGroupKey,
@@ -83,6 +84,7 @@ import { MultiModelDisplay, LayoutSwitcher, type MultiModelDisplayMode } from '.
 import PermissionCard from './PermissionCard';
 import AskUserCard from './AskUserCard';
 import { ChatImageNode } from './ChatImageNode';
+import { HtmlRenderNode } from './HtmlRenderNode';
 import { formatChatTime } from './chatTime';
 
 import { invoke } from '@/lib/invoke';
@@ -1045,7 +1047,7 @@ function ToolCallNode(props: NodeComponentProps<{
   );
 }
 
-setCustomComponents('chat', { think: ThinkNode, 'web-search-query': WebSearchQueryNode, 'web-search': WebSearchNode, 'knowledge-retrieval': KnowledgeRetrievalNode, 'memory-retrieval': MemoryRetrievalNode, 'tool-call': ToolCallNode, d2: ChatD2Node, vmr_container: McpContainerNode, image: ChatImageNode, img: ChatImageNode });
+setCustomComponents('chat', { think: ThinkNode, 'web-search-query': WebSearchQueryNode, 'web-search': WebSearchNode, 'knowledge-retrieval': KnowledgeRetrievalNode, 'memory-retrieval': MemoryRetrievalNode, 'tool-call': ToolCallNode, 'html-render': withMarkstreamComponentDisplay(HtmlRenderNode, 'block'), d2: ChatD2Node, vmr_container: McpContainerNode, image: ChatImageNode, img: ChatImageNode });
 
 const AssistantMarkdown = React.memo(function AssistantMarkdown({
   content,
@@ -1104,7 +1106,10 @@ const AssistantMarkdown = React.memo(function AssistantMarkdown({
       ? parseChatMarkdown(displaySplit.prefix)
       : undefined
   ), [displaySplit.prefix]);
-  const rendererContent = displaySplit.body;
+  const rendererContent = useMemo(
+    () => normalizeHtmlRenderContent(displaySplit.body, { final: !isStreaming }),
+    [displaySplit.body, isStreaming],
+  );
 
   useEffect(() => {
     if (!hasDeferredHeavyNodes) {
