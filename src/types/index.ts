@@ -107,34 +107,39 @@ export interface ProviderImportBatchResult {
   provider_ids: string[];
 }
 
-export interface CherryStudioImportWarning {
+export interface ThirdPartyImportWarning {
   code: string;
   message: string;
   sourceId: string | null;
 }
 
-export interface CherryStudioImportSummary {
+export interface ThirdPartyImportSummary {
   conversationCount: number;
   messageCount: number;
   fileCount: number;
   importableProviderCount: number;
   skippedEmptyTopicCount: number;
   duplicateConversationCount: number;
-  warnings: CherryStudioImportWarning[];
+  warnings: ThirdPartyImportWarning[];
 }
 
-export interface CherryStudioImportOptions {
+export interface ThirdPartyImportOptions {
   importProviderKeys: boolean;
 }
 
-export interface CherryStudioImportResult {
+export interface ThirdPartyImportResult {
   importedConversationCount: number;
   importedMessageCount: number;
   importedFileCount: number;
   importedProviderCount: number;
   skippedDuplicateConversationCount: number;
-  warnings: CherryStudioImportWarning[];
+  warnings: ThirdPartyImportWarning[];
 }
+
+export type CherryStudioImportWarning = ThirdPartyImportWarning;
+export type CherryStudioImportSummary = ThirdPartyImportSummary;
+export type CherryStudioImportOptions = ThirdPartyImportOptions;
+export type CherryStudioImportResult = ThirdPartyImportResult;
 
 // === Model System ===
 export type ModelCapability = 'TextChat' | 'Vision' | 'FunctionCalling' | 'Reasoning' | 'RealtimeVoice';

@@ -1,6 +1,7 @@
 pub mod artifact;
 pub mod backup;
 pub mod cherry_import;
+pub mod kelivo_import;
 pub mod cli_config;
 pub mod context_source;
 pub mod conversation;

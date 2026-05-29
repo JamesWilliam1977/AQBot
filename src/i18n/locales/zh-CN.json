@@ -936,6 +936,21 @@
       "emptyTopics": "将跳过 {{count}} 个空会话",
       "success": "Cherry Studio 备份导入完成"
     },
+    "kelivoImport": {
+      "source": "Kelivo",
+      "action": "导入 Kelivo",
+      "title": "导入 Kelivo 备份",
+      "selectFile": "选择备份文件",
+      "preview": "导入预览",
+      "conversations": "会话",
+      "messages": "消息",
+      "files": "文件",
+      "providers": "服务商",
+      "duplicates": "重复",
+      "importProviderKeys": "同时导入会话引用的服务商和 API Key",
+      "emptyTopics": "将跳过 {{count}} 个空会话",
+      "success": "Kelivo 备份导入完成"
+    },
     "clearSuccess": "数据已清除",
     "clearDataConfirmTitle": "确认清除数据",
     "clearDataConfirmContent": "此操作将清除所有对话记录，不可撤销。设置和应用配置将保留。",

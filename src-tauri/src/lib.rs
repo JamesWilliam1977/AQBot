@@ -390,6 +390,8 @@ pub fn run() {
         commands::backup::update_backup_settings,
         commands::cherry_import::scan_cherry_studio_import,
         commands::cherry_import::import_cherry_studio_backup,
+        commands::kelivo_import::scan_kelivo_import,
+        commands::kelivo_import::import_kelivo_backup,
         // webdav
         commands::webdav::get_webdav_config,
         commands::webdav::save_webdav_config,

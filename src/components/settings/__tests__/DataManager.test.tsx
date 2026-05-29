@@ -78,4 +78,20 @@ describe('DataManager', () => {
 
     expect(screen.getByText('settings.cherryImport.title')).toBeInTheDocument();
   });
+
+  it('exposes Kelivo import from third-party data import settings', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <App>
+        <DataManager />
+      </App>,
+    );
+
+    expect(screen.getByText('settings.groupThirdPartyImport')).toBeInTheDocument();
+    expect(screen.getByText('settings.kelivoImport.source')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'settings.kelivoImport.action' }));
+
+    expect(screen.getByText('settings.kelivoImport.title')).toBeInTheDocument();
+  });
 });
