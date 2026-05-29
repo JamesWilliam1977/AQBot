@@ -1,0 +1,576 @@
+# Instincts generated from https://github.com/JamesWilliam1977/AQBot
+# Generated: 2026-04-29T04:35:10.252Z
+# Version: 2.0
+# NOTE: This file supplements (does not replace) any existing curated instincts.
+# High-confidence manually curated instincts should be preserved alongside these.
+
+---
+id: AQBot-commit-conventional
+trigger: "when writing a commit message"
+confidence: 0.85
+domain: git
+source: repo-analysis
+source_repo: https://github.com/JamesWilliam1977/AQBot
+---
+
+# AQBot Commit Conventional
+
+## Action
+
+Use conventional commit format with prefixes: chore, feat, ci, fix
+
+## Evidence
+
+- 8 commits analyzed
+- Detected conventional commit pattern
+- Examples: fix: 修复向量模型选择下拉为空, feat(draw): 增加绘画模块，支持gpt-image系列模型，包括图像编辑、区域编辑等等
+
+---
+id: AQBot-commit-length
+trigger: "when writing a commit message"
+confidence: 0.6
+domain: git
+source: repo-analysis
+source_repo: https://github.com/JamesWilliam1977/AQBot
+---
+
+# AQBot Commit Length
+
+## Action
+
+Keep commit messages concise (~35 characters)
+
+## Evidence
+
+- Average commit message length: 35 chars
+- Based on 8 commits
+
+---
+id: AQBot-naming-files
+trigger: "when creating a new file"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/JamesWilliam1977/AQBot
+---
+
+# AQBot Naming Files
+
+## Action
+
+Use camelCase naming convention
+
+## Evidence
+
+- Analyzed file naming patterns in repository
+- Dominant pattern: camelCase
+
+---
+id: AQBot-import-alias
+trigger: "when importing modules"
+confidence: 0.85
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/JamesWilliam1977/AQBot
+---
+
+# AQBot Import Alias
+
+## Action
+
+Use path aliases (@/, ~/) instead of relative imports
+
+## Evidence
+
+- Import analysis shows alias pattern
+- Example: import { x } from '@/lib/x'
+
+---
+id: AQBot-export-style
+trigger: "when exporting from a module"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/JamesWilliam1977/AQBot
+---
+
+# AQBot Export Style
+
+## Action
+
+Prefer named exports
+
+## Evidence
+
+- Export pattern analysis
+- Dominant style: named
+
+---
+id: AQBot-arch-type-based
+trigger: "when adding new code"
+confidence: 0.8
+domain: architecture
+source: repo-analysis
+source_repo: https://github.com/JamesWilliam1977/AQBot
+---
+
+# AQBot Arch Type Based
+
+## Action
+
+Place code in the appropriate type folder (components/, services/, utils/, etc.)
+
+## Evidence
+
+- Type-based module organization detected
+- Folders: components, i18n, lib, pages, stores
+
+---
+id: AQBot-test-framework
+trigger: "when writing tests"
+confidence: 0.9
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/JamesWilliam1977/AQBot
+---
+
+# AQBot Test Framework
+
+## Action
+
+Use vitest as the test framework
+
+## Evidence
+
+- Test framework detected: vitest
+- File pattern: *.test.tsx
+
+---
+id: AQBot-test-naming
+trigger: "when creating a test file"
+confidence: 0.85
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/JamesWilliam1977/AQBot
+---
+
+# AQBot Test Naming
+
+## Action
+
+Name test files using the pattern: *.test.tsx
+
+## Evidence
+
+- File pattern: *.test.tsx
+- Consistent across test files
+
+---
+id: AQBot-test-mocking
+trigger: "when mocking dependencies in tests"
+confidence: 0.75
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/JamesWilliam1977/AQBot
+---
+
+# AQBot Test Mocking
+
+## Action
+
+Use vi.mock for mocking
+
+## Evidence
+
+- Mocking pattern detected: vi.mock
+- Consistent across test files
+
+---
+id: AQBot-test-types
+trigger: "when planning tests for a feature"
+confidence: 0.7
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/JamesWilliam1977/AQBot
+---
+
+# AQBot Test Types
+
+## Action
+
+Write unit, integration tests to match project standards
+
+## Evidence
+
+- Test types detected: unit, integration
+- Coverage config: no
+
+---
+id: AQBot-workflow-bump-version
+trigger: "when doing bump version"
+confidence: 0.65
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/JamesWilliam1977/AQBot
+---
+
+# AQBot Workflow Bump Version
+
+## Action
+
+Follow the bump-version workflow:
+1. Update the version number in package.json
+2. Update the version number in src-tauri/tauri.conf.json
+3. Commit the changes with a version bump message
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~3x per month
+- Files: package.json, src-tauri/tauri.conf.json
+
+---
+id: AQBot-workflow-update-release-ci-workflow
+trigger: "when doing update release ci workflow"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/JamesWilliam1977/AQBot
+---
+
+# AQBot Workflow Update Release Ci Workflow
+
+## Action
+
+Follow the update-release-ci-workflow workflow:
+1. Edit .github/workflows/release.yml and/or other workflow files
+2. Commit with a CI-related message
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: .github/workflows/release.yml, .github/workflows/test-build.yml, .github/workflows/test-windows-build.yml
+
+---
+id: AQBot-workflow-feature-module-addition-with-tests-and-i18n
+trigger: "when doing feature module addition with tests and i18n"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/JamesWilliam1977/AQBot
+---
+
+# AQBot Workflow Feature Module Addition With Tests And I18n
+
+## Action
+
+Follow the feature-module-addition-with-tests-and-i18n workflow:
+1. Create/update backend Rust files (entity, repo, commands, migration, types)
+2. Create/update frontend React components for the new module
+3. Add/update store and types
+4. Add/update tests for lib, components, pages, and stores
+5. Add/update i18n locale files for new strings
+6. Update relevant index and layout files
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: src-tauri/crates/core/src/entity/*.rs, src-tauri/crates/core/src/repo/*.rs, src-tauri/crates/core/src/types.rs
+
+---
+id: aqbot-instinct-file-naming-camelcase
+trigger: "When creating or renaming a file in the codebase"
+confidence: 0.85
+domain: code-style
+source: repo-analysis
+source_repo: JamesWilliam1977/AQBot
+---
+
+# Aqbot Instinct File Naming Camelcase
+
+## Action
+
+Name the file using camelCase
+
+## Evidence
+
+- Pattern in codeStyle.namingConventions.files
+- Consistent with src/components, src/pages structure
+
+---
+id: aqbot-instinct-function-naming-camelcase
+trigger: "When defining a function"
+confidence: 0.85
+domain: code-style
+source: repo-analysis
+source_repo: JamesWilliam1977/AQBot
+---
+
+# Aqbot Instinct Function Naming Camelcase
+
+## Action
+
+Name the function using camelCase
+
+## Evidence
+
+- Pattern in codeStyle.namingConventions.functions
+
+---
+id: aqbot-instinct-class-naming-pascalcase
+trigger: "When defining a class"
+confidence: 0.85
+domain: code-style
+source: repo-analysis
+source_repo: JamesWilliam1977/AQBot
+---
+
+# Aqbot Instinct Class Naming Pascalcase
+
+## Action
+
+Name the class using PascalCase
+
+## Evidence
+
+- Pattern in codeStyle.namingConventions.classes
+
+---
+id: aqbot-instinct-constant-naming-screaming-snake-case
+trigger: "When defining a constant"
+confidence: 0.85
+domain: code-style
+source: repo-analysis
+source_repo: JamesWilliam1977/AQBot
+---
+
+# Aqbot Instinct Constant Naming Screaming Snake Case
+
+## Action
+
+Name the constant using SCREAMING_SNAKE_CASE
+
+## Evidence
+
+- Pattern in codeStyle.namingConventions.constants
+
+---
+id: aqbot-instinct-import-alias-style
+trigger: "When importing modules"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: JamesWilliam1977/AQBot
+---
+
+# Aqbot Instinct Import Alias Style
+
+## Action
+
+Use alias import style
+
+## Evidence
+
+- Pattern in codeStyle.importStyle
+
+---
+id: aqbot-instinct-export-named-style
+trigger: "When exporting modules or functions"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: JamesWilliam1977/AQBot
+---
+
+# Aqbot Instinct Export Named Style
+
+## Action
+
+Use named exports
+
+## Evidence
+
+- Pattern in codeStyle.exportStyle
+
+---
+id: aqbot-instinct-test-file-pattern
+trigger: "When creating a test file"
+confidence: 0.9
+domain: testing
+source: repo-analysis
+source_repo: JamesWilliam1977/AQBot
+---
+
+# Aqbot Instinct Test File Pattern
+
+## Action
+
+Name the test file with the pattern *.test.tsx
+
+## Evidence
+
+- Pattern in testing.filePattern
+- Files in src/components/<module>/__tests__/*.test.tsx
+
+---
+id: aqbot-instinct-test-framework-vitest
+trigger: "When writing tests"
+confidence: 0.9
+domain: testing
+source: repo-analysis
+source_repo: JamesWilliam1977/AQBot
+---
+
+# Aqbot Instinct Test Framework Vitest
+
+## Action
+
+Use the Vitest framework
+
+## Evidence
+
+- Pattern in testing.framework
+
+---
+id: aqbot-instinct-test-mocking-vi-mock
+trigger: "When mocking dependencies in tests"
+confidence: 0.85
+domain: testing
+source: repo-analysis
+source_repo: JamesWilliam1977/AQBot
+---
+
+# Aqbot Instinct Test Mocking Vi Mock
+
+## Action
+
+Use vi.mock for mocking
+
+## Evidence
+
+- Pattern in testing.mockingStyle
+
+---
+id: aqbot-instinct-test-types-unit-integration
+trigger: "When planning or writing tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: JamesWilliam1977/AQBot
+---
+
+# Aqbot Instinct Test Types Unit Integration
+
+## Action
+
+Include both unit and integration tests
+
+## Evidence
+
+- Pattern in testing.testTypes
+- Presence of __tests__ folders for components, stores, pages, lib
+
+---
+id: aqbot-instinct-git-conventional-commit-prefix
+trigger: "When writing a commit message"
+confidence: 0.9
+domain: git
+source: repo-analysis
+source_repo: JamesWilliam1977/AQBot
+---
+
+# Aqbot Instinct Git Conventional Commit Prefix
+
+## Action
+
+Start the commit message with a conventional prefix (chore, feat, ci, fix)
+
+## Evidence
+
+- Seen in commits: 'fix: 修复向量模型选择下拉为空', 'feat(draw): 增加绘画模块...'
+- Pattern in commits.prefixes
+
+---
+id: aqbot-instinct-git-commit-length
+trigger: "When writing a commit message"
+confidence: 0.7
+domain: git
+source: repo-analysis
+source_repo: JamesWilliam1977/AQBot
+---
+
+# Aqbot Instinct Git Commit Length
+
+## Action
+
+Keep the commit message concise (around 35 characters on average)
+
+## Evidence
+
+- Pattern in commits.averageLength
+- Examples in commits.examples
+
+---
+id: aqbot-instinct-workflow-bump-version
+trigger: "When a new release is desired"
+confidence: 0.99
+domain: workflow
+source: repo-analysis
+source_repo: JamesWilliam1977/AQBot
+---
+
+# Aqbot Instinct Workflow Bump Version
+
+## Action
+
+Update version numbers in package.json and src-tauri/tauri.conf.json, then commit with a version bump message
+
+## Evidence
+
+- Workflow: bump-version
+- Commits: 'chore(version): bump version to v0.0.52'
+- Files: package.json, src-tauri/tauri.conf.json
+
+---
+id: aqbot-instinct-workflow-update-release-ci
+trigger: "When optimizing or fixing CI/CD for releases/builds"
+confidence: 0.9
+domain: workflow
+source: repo-analysis
+source_repo: JamesWilliam1977/AQBot
+---
+
+# Aqbot Instinct Workflow Update Release Ci
+
+## Action
+
+Edit .github/workflows/release.yml and/or related workflow files, then commit with a CI-related message
+
+## Evidence
+
+- Workflow: update-release-ci-workflow
+- Files: .github/workflows/release.yml, test-build.yml, test-windows-build.yml
+
+---
+id: aqbot-instinct-workflow-feature-module-addition
+trigger: "When adding a major new module with backend, frontend, tests, and i18n"
+confidence: 0.92
+domain: workflow
+source: repo-analysis
+source_repo: JamesWilliam1977/AQBot
+---
+
+# Aqbot Instinct Workflow Feature Module Addition
+
+## Action
+
+Update/create backend Rust files, frontend React components, store/types, tests, and i18n locale files for the new module
+
+## Evidence
+
+- Workflow: feature-module-addition-with-tests-and-i18n
+- Files: src-tauri/crates/core/src/entity/*.rs, src/components/<module>/*.tsx, src/i18n/locales/*.json, etc.
+- Commit: 'feat(draw): 增加绘画模块...'
+
