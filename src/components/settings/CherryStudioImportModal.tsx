@@ -1,10 +1,10 @@
 import { useState } from 'react';
-import { Alert, App, Button, Checkbox, Divider, Modal, Space, Typography } from 'antd';
-import { FileArchive, Upload } from 'lucide-react';
+import { Alert, App, Checkbox, Divider, Modal, Space, Typography } from 'antd';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@/lib/invoke';
 import { getErrorMessage } from '@/lib/errorMessage';
 import type { CherryStudioImportResult, CherryStudioImportSummary } from '@/types';
+import { ThirdPartyImportUpload } from './ThirdPartyImportUpload';
 
 const { Text, Title } = Typography;
 
@@ -43,15 +43,8 @@ export function CherryStudioImportModal({ open, onClose, onImported }: Props) {
     onClose();
   };
 
-  const handleSelectFile = async () => {
+  const handleSelectedPath = async (selected: string) => {
     try {
-      const { open: openFile } = await import('@tauri-apps/plugin-dialog');
-      const selected = await openFile({
-        multiple: false,
-        filters: [{ name: 'Cherry Studio', extensions: ['zip', 'json'] }],
-      });
-      if (!selected || typeof selected !== 'string') return;
-
       setPath(selected);
       setSummary(null);
       setScanLoading(true);
@@ -63,6 +56,21 @@ export function CherryStudioImportModal({ open, onClose, onImported }: Props) {
       message.error(getErrorMessage(error));
     } finally {
       setScanLoading(false);
+    }
+  };
+
+  const handleSelectFile = async () => {
+    try {
+      const { open: openFile } = await import('@tauri-apps/plugin-dialog');
+      const selected = await openFile({
+        multiple: false,
+        filters: [{ name: 'Cherry Studio', extensions: ['zip', 'json'] }],
+      });
+      if (!selected || typeof selected !== 'string') return;
+
+      await handleSelectedPath(selected);
+    } catch (error) {
+      message.error(getErrorMessage(error));
     }
   };
 
@@ -97,21 +105,18 @@ export function CherryStudioImportModal({ open, onClose, onImported }: Props) {
       confirmLoading={importLoading}
       width={640}
     >
-      <Space direction="vertical" size={14} style={{ width: '100%' }}>
-        <Button
-          icon={<Upload size={16} />}
+      <Space orientation="vertical" size={14} style={{ width: '100%' }}>
+        <ThirdPartyImportUpload
+          accept=".zip,.json"
+          active={open}
+          exportPath={t('settings.cherryImport.exportPath')}
           loading={scanLoading}
-          onClick={handleSelectFile}
-        >
-          {t('settings.cherryImport.selectFile')}
-        </Button>
-
-        {path && (
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            <FileArchive size={13} style={{ marginRight: 6, verticalAlign: -2 }} />
-            {path}
-          </Text>
-        )}
+          path={path}
+          supportedFormats={t('settings.cherryImport.supportedFormats')}
+          uploadHint={t('settings.cherryImport.uploadHint')}
+          onPathSelected={handleSelectedPath}
+          onPickFile={handleSelectFile}
+        />
 
         {summary && (
           <>
@@ -139,7 +144,7 @@ export function CherryStudioImportModal({ open, onClose, onImported }: Props) {
               />
             )}
             {summary.warnings.length > 0 && (
-              <Space direction="vertical" size={6} style={{ width: '100%' }}>
+              <Space orientation="vertical" size={6} style={{ width: '100%' }}>
                 {summary.warnings.map((warning, index) => (
                   <Alert
                     key={`${warning.code}-${warning.sourceId ?? index}`}

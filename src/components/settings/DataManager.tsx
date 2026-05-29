@@ -143,6 +143,13 @@ export function DataManager() {
       </SettingsGroup>
       <SettingsGroup title={t('settings.groupThirdPartyImport')}>
         <div style={rowStyle} className="flex items-center justify-between">
+          <span>{t('settings.chatgptImport.source')}</span>
+          <Button icon={<FileArchive size={16} />} onClick={() => setChatgptImportOpen(true)}>
+            {t('settings.chatgptImport.action')}
+          </Button>
+        </div>
+        <Divider style={{ margin: '4px 0' }} />
+        <div style={rowStyle} className="flex items-center justify-between">
           <span>{t('settings.cherryImport.source')}</span>
           <Button icon={<FileArchive size={16} />} onClick={() => setCherryImportOpen(true)}>
             {t('settings.cherryImport.action')}
@@ -153,13 +160,6 @@ export function DataManager() {
           <span>{t('settings.kelivoImport.source')}</span>
           <Button icon={<FileArchive size={16} />} onClick={() => setKelivoImportOpen(true)}>
             {t('settings.kelivoImport.action')}
-          </Button>
-        </div>
-        <Divider style={{ margin: '4px 0' }} />
-        <div style={rowStyle} className="flex items-center justify-between">
-          <span>{t('settings.chatgptImport.source')}</span>
-          <Button icon={<FileArchive size={16} />} onClick={() => setChatgptImportOpen(true)}>
-            {t('settings.chatgptImport.action')}
           </Button>
         </div>
       </SettingsGroup>

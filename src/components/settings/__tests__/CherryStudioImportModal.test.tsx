@@ -63,7 +63,10 @@ describe('CherryStudioImportModal', () => {
       </App>,
     );
 
-    await user.click(screen.getByRole('button', { name: 'settings.cherryImport.selectFile' }));
+    expect(screen.getByText('settings.cherryImport.supportedFormats')).toBeInTheDocument();
+    expect(screen.getByText('settings.cherryImport.exportPath')).toBeInTheDocument();
+
+    await user.click(screen.getByText('settings.cherryImport.uploadHint'));
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith('scan_cherry_studio_import', {
@@ -86,7 +89,7 @@ describe('CherryStudioImportModal', () => {
       </App>,
     );
 
-    await user.click(screen.getByRole('button', { name: 'settings.cherryImport.selectFile' }));
+    await user.click(screen.getByText('settings.cherryImport.uploadHint'));
     await screen.findByText('settings.cherryImport.preview');
     await user.click(screen.getByLabelText('settings.cherryImport.importProviderKeys'));
     await user.click(screen.getByRole('button', { name: 'common.confirm' }));

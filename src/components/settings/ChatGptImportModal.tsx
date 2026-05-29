@@ -1,10 +1,10 @@
 import { useState } from 'react';
-import { Alert, App, Button, Divider, Modal, Space, Typography } from 'antd';
-import { FileArchive, Upload } from 'lucide-react';
+import { Alert, App, Divider, Modal, Space, Typography } from 'antd';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@/lib/invoke';
 import { getErrorMessage } from '@/lib/errorMessage';
 import type { ChatGptImportResult, ChatGptImportSummary } from '@/types';
+import { ThirdPartyImportUpload } from './ThirdPartyImportUpload';
 
 const { Text, Title } = Typography;
 
@@ -41,15 +41,8 @@ export function ChatGptImportModal({ open, onClose, onImported }: Props) {
     onClose();
   };
 
-  const handleSelectFile = async () => {
+  const handleSelectedPath = async (selected: string) => {
     try {
-      const { open: openFile } = await import('@tauri-apps/plugin-dialog');
-      const selected = await openFile({
-        multiple: false,
-        filters: [{ name: 'ChatGPT Export', extensions: ['zip', 'json'] }],
-      });
-      if (!selected || typeof selected !== 'string') return;
-
       setPath(selected);
       setSummary(null);
       setScanLoading(true);
@@ -61,6 +54,21 @@ export function ChatGptImportModal({ open, onClose, onImported }: Props) {
       message.error(getErrorMessage(error));
     } finally {
       setScanLoading(false);
+    }
+  };
+
+  const handleSelectFile = async () => {
+    try {
+      const { open: openFile } = await import('@tauri-apps/plugin-dialog');
+      const selected = await openFile({
+        multiple: false,
+        filters: [{ name: 'ChatGPT Export', extensions: ['zip', 'json'] }],
+      });
+      if (!selected || typeof selected !== 'string') return;
+
+      await handleSelectedPath(selected);
+    } catch (error) {
+      message.error(getErrorMessage(error));
     }
   };
 
@@ -92,21 +100,18 @@ export function ChatGptImportModal({ open, onClose, onImported }: Props) {
       confirmLoading={importLoading}
       width={640}
     >
-      <Space direction="vertical" size={14} style={{ width: '100%' }}>
-        <Button
-          icon={<Upload size={16} />}
+      <Space orientation="vertical" size={14} style={{ width: '100%' }}>
+        <ThirdPartyImportUpload
+          accept=".zip,.json"
+          active={open}
+          exportPath={t('settings.chatgptImport.exportPath')}
           loading={scanLoading}
-          onClick={handleSelectFile}
-        >
-          {t('settings.chatgptImport.selectFile')}
-        </Button>
-
-        {path && (
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            <FileArchive size={13} style={{ marginRight: 6, verticalAlign: -2 }} />
-            {path}
-          </Text>
-        )}
+          path={path}
+          supportedFormats={t('settings.chatgptImport.supportedFormats')}
+          uploadHint={t('settings.chatgptImport.uploadHint')}
+          onPathSelected={handleSelectedPath}
+          onPickFile={handleSelectFile}
+        />
 
         {summary && (
           <>
@@ -119,7 +124,7 @@ export function ChatGptImportModal({ open, onClose, onImported }: Props) {
               <CountItem label={t('settings.chatgptImport.duplicates')} value={summary.duplicateConversationCount} />
             </Space>
             {summary.warnings.length > 0 && (
-              <Space direction="vertical" size={6} style={{ width: '100%' }}>
+              <Space orientation="vertical" size={6} style={{ width: '100%' }}>
                 {summary.warnings.map((warning, index) => (
                   <Alert
                     key={`${warning.code}-${warning.sourceId ?? index}`}

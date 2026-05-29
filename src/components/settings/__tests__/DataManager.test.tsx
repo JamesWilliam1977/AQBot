@@ -109,4 +109,19 @@ describe('DataManager', () => {
 
     expect(screen.getByText('settings.chatgptImport.title')).toBeInTheDocument();
   });
+
+  it('places ChatGPT official export before other third-party imports', () => {
+    render(
+      <App>
+        <DataManager />
+      </App>,
+    );
+
+    const chatgpt = screen.getByText('settings.chatgptImport.source');
+    const cherry = screen.getByText('settings.cherryImport.source');
+    const kelivo = screen.getByText('settings.kelivoImport.source');
+
+    expect(chatgpt.compareDocumentPosition(cherry) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(chatgpt.compareDocumentPosition(kelivo) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
 });

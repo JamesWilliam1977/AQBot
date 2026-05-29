@@ -59,7 +59,10 @@ describe('ChatGptImportModal', () => {
       </App>,
     );
 
-    await user.click(screen.getByRole('button', { name: 'settings.chatgptImport.selectFile' }));
+    expect(screen.getByText('settings.chatgptImport.supportedFormats')).toBeInTheDocument();
+    expect(screen.getByText('settings.chatgptImport.exportPath')).toBeInTheDocument();
+
+    await user.click(screen.getByText('settings.chatgptImport.uploadHint'));
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith('scan_chatgpt_import', {
@@ -82,7 +85,7 @@ describe('ChatGptImportModal', () => {
       </App>,
     );
 
-    await user.click(screen.getByRole('button', { name: 'settings.chatgptImport.selectFile' }));
+    await user.click(screen.getByText('settings.chatgptImport.uploadHint'));
     await screen.findByText('settings.chatgptImport.preview');
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'common.confirm' }));

@@ -63,7 +63,10 @@ describe('KelivoImportModal', () => {
       </App>,
     );
 
-    await user.click(screen.getByRole('button', { name: 'settings.kelivoImport.selectFile' }));
+    expect(screen.getByText('settings.kelivoImport.supportedFormats')).toBeInTheDocument();
+    expect(screen.getByText('settings.kelivoImport.exportPath')).toBeInTheDocument();
+
+    await user.click(screen.getByText('settings.kelivoImport.uploadHint'));
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith('scan_kelivo_import', {
@@ -86,7 +89,7 @@ describe('KelivoImportModal', () => {
       </App>,
     );
 
-    await user.click(screen.getByRole('button', { name: 'settings.kelivoImport.selectFile' }));
+    await user.click(screen.getByText('settings.kelivoImport.uploadHint'));
     await screen.findByText('settings.kelivoImport.preview');
     await user.click(screen.getByLabelText('settings.kelivoImport.importProviderKeys'));
     await user.click(screen.getByRole('button', { name: 'common.confirm' }));
