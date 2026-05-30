@@ -325,6 +325,21 @@ export interface ConversationSummary {
   updated_at: number;
 }
 
+export interface CompressionEvent {
+  conversation_id: string;
+  marker_message: Message;
+  summary: ConversationSummary;
+}
+
+export interface ContextUsage {
+  used_tokens: number;
+  max_tokens: number | null;
+  threshold_tokens: number | null;
+  has_summary: boolean;
+  compressed_until_message_id: string | null;
+  messages_after_boundary: number;
+}
+
 export interface UpdateConversationInput {
   title?: string;
   provider_id?: string;

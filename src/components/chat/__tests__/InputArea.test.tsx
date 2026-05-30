@@ -1,5 +1,5 @@
 import { App } from 'antd';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppSettings } from '@/types';
@@ -19,11 +19,13 @@ const toggleMemoryNamespace = vi.fn();
 const setThinkingBudget = vi.fn();
 const setThinkingLevel = vi.fn();
 const insertContextClear = vi.fn();
+const getContextUsage = vi.fn();
 const setActivePage = vi.fn();
 const setSettingsSection = vi.fn();
 
 const conversationState = {
   streaming: false,
+  compressingConversationId: null as string | null,
   activeConversationId: 'conv-1',
   sendMessage,
   createConversation,
@@ -51,6 +53,7 @@ const conversationState = {
   setThinkingBudget,
   setThinkingLevel,
   insertContextClear,
+  getContextUsage,
 };
 
 const providerState = {
@@ -178,6 +181,8 @@ describe('InputArea', () => {
     conversationState.conversations[0].model_id = 'model-1';
     conversationState.thinkingBudget = null;
     conversationState.thinkingLevel = null;
+    conversationState.compressingConversationId = null;
+    getContextUsage.mockResolvedValue(null);
     settingsState.settings.document_attachment_reading_enabled = false;
   });
 
@@ -294,6 +299,28 @@ describe('InputArea', () => {
     expect(screen.queryByText('Low')).not.toBeInTheDocument();
     expect(screen.queryByText('Medium')).not.toBeInTheDocument();
     expect(screen.queryByText('XHigh')).not.toBeInTheDocument();
+  });
+
+  it('shows backend context usage instead of a loaded-message estimate', async () => {
+    getContextUsage.mockResolvedValueOnce({
+      used_tokens: 720000,
+      max_tokens: 1000000,
+      threshold_tokens: 700000,
+      has_summary: true,
+      compressed_until_message_id: 'msg-1',
+      messages_after_boundary: 3,
+    });
+
+    render(
+      <App>
+        <InputArea />
+      </App>,
+    );
+
+    await waitFor(() => expect(getContextUsage).toHaveBeenCalledWith('conv-1'));
+    await userEvent.hover(screen.getByLabelText('上下文 tokens'));
+
+    expect(await screen.findByText('720,000 / 1,000,000 tokens (72%)')).toBeInTheDocument();
   });
 
   it('shows document attachment controls for non-vision models when document reading is enabled', () => {

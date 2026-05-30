@@ -79,7 +79,7 @@ function deferred<T>() {
 }
 
 async function flushPromises() {
-  for (let index = 0; index < 8; index += 1) {
+  for (let index = 0; index < 16; index += 1) {
     await Promise.resolve();
   }
 }
@@ -1741,6 +1741,111 @@ describe('conversationStore pagination', () => {
     expect(useConversationStore.getState().enabledMcpServerIds).toEqual([]);
     expect(useConversationStore.getState().enabledKnowledgeBaseIds).toEqual([]);
     expect(useConversationStore.getState().enabledMemoryNamespaceIds).toEqual([]);
+  });
+
+  it('tracks context compression loading by conversation id', async () => {
+    const summary = {
+      id: 'summary-1',
+      conversation_id: 'conv-1',
+      summary_text: 'compressed context',
+      compressed_until_message_id: 'msg-1',
+      token_count: 12,
+      model_used: 'summary-model',
+      created_at: 1,
+      updated_at: 1,
+    };
+    const compression = deferred<typeof summary>();
+    invokeMock.mockImplementation((cmd: string, args: Record<string, unknown>) => {
+      if (cmd === 'compress_context') {
+        expect(args.conversationId).toBe('conv-1');
+        return compression.promise;
+      }
+      if (cmd === 'list_messages_page') {
+        return Promise.resolve(makePage([makeMessage(1, 'conv-1')], false));
+      }
+      throw new Error(`unexpected command: ${cmd}`);
+    });
+    const { useConversationStore } = await import('../conversationStore');
+
+    useConversationStore.setState({
+      activeConversationId: 'conv-1',
+      conversations: [
+        makeConversation('conv-1'),
+        makeConversation('conv-2'),
+      ] as never[],
+      messages: [makeMessage(1, 'conv-1')],
+    });
+
+    const pending = useConversationStore.getState().compressContext();
+    await flushPromises();
+
+    expect(useConversationStore.getState().compressingConversationId).toBe('conv-1');
+    useConversationStore.setState({ activeConversationId: 'conv-2' });
+    expect(useConversationStore.getState().compressingConversationId).toBe('conv-1');
+
+    compression.resolve(summary);
+    await pending;
+
+    expect(useConversationStore.getState().compressingConversationId).toBeNull();
+  });
+
+  it('applies compression events only to the matching active conversation', async () => {
+    const listeners = new Map<string, (event: { payload: unknown }) => void>();
+    listenMock.mockImplementation(async (eventName: string, handler: (event: { payload: unknown }) => void) => {
+      listeners.set(eventName, handler);
+      return () => {};
+    });
+    const { useConversationStore } = await import('../conversationStore');
+    const marker = {
+      ...makeMessage(50, 'conv-1'),
+      role: 'system',
+      content: '<!-- context-compressed -->',
+    };
+    const otherMarker = {
+      ...makeMessage(60, 'conv-2'),
+      role: 'system',
+      content: '<!-- context-compressed -->',
+    };
+    const summary = {
+      id: 'summary-1',
+      conversation_id: 'conv-1',
+      summary_text: 'compressed context',
+      compressed_until_message_id: 'msg-1',
+      token_count: 12,
+      model_used: 'summary-model',
+      created_at: 1,
+      updated_at: 1,
+    };
+
+    useConversationStore.setState({
+      activeConversationId: 'conv-1',
+      conversations: [
+        makeConversation('conv-1'),
+        makeConversation('conv-2'),
+      ] as never[],
+      messages: [makeMessage(1, 'conv-1')],
+    });
+
+    await useConversationStore.getState().startStreamListening();
+
+    listeners.get('conversation:compressed')?.({
+      payload: {
+        conversation_id: 'conv-2',
+        marker_message: otherMarker,
+        summary: { ...summary, conversation_id: 'conv-2' },
+      },
+    });
+    expect(useConversationStore.getState().messages.map((message) => message.id)).toEqual(['msg-1']);
+
+    listeners.get('conversation:compressed')?.({
+      payload: {
+        conversation_id: 'conv-1',
+        marker_message: marker,
+        summary,
+      },
+    });
+
+    expect(useConversationStore.getState().messages.map((message) => message.id)).toEqual(['msg-1', 'msg-50']);
   });
 
   it('persists reasoning level changes separately from legacy thinking budget', async () => {

@@ -115,9 +115,10 @@ export function InputArea() {
 
   const { message: messageApi, modal } = App.useApp();
   const streaming = useConversationStore((s) => s.streaming);
-  const compressing = useConversationStore((s) => s.compressing);
+  const compressingConversationId = useConversationStore((s) => s.compressingConversationId);
   const cancelCurrentStream = useConversationStore((s) => s.cancelCurrentStream);
   const activeConversationId = useConversationStore((s) => s.activeConversationId);
+  const compressing = compressingConversationId === activeConversationId;
   const sendMessage = useConversationStore((s) => s.sendMessage);
   const sendAgentMessage = useConversationStore((s) => s.sendAgentMessage);
   const createConversation = useConversationStore((s) => s.createConversation);
@@ -694,23 +695,41 @@ export function InputArea() {
   );
 
   // Context token usage calculation
-  const getCompressionSummary = useConversationStore((s) => s.getCompressionSummary);
-  const [summaryTokenCount, setSummaryTokenCount] = useState<number>(0);
+  const getContextUsage = useConversationStore((s) => s.getContextUsage);
+  const [serverContextUsage, setServerContextUsage] = useState<{
+    usedTokens: number;
+    maxTokens: number;
+    percent: number;
+  } | null>(null);
 
   useEffect(() => {
-    if (!activeConversationId || !activeConversation?.context_compression) {
-      setSummaryTokenCount(0);
+    if (!activeConversationId) {
+      setServerContextUsage(null);
       return;
     }
-    getCompressionSummary(activeConversationId).then((s) => {
-      setSummaryTokenCount(s?.token_count ?? 0);
+    let cancelled = false;
+    getContextUsage(activeConversationId).then((usage) => {
+      if (cancelled) return;
+      if (!usage?.max_tokens) {
+        setServerContextUsage(null);
+        return;
+      }
+      setServerContextUsage({
+        usedTokens: usage.used_tokens,
+        maxTokens: usage.max_tokens,
+        percent: Math.min(Math.round((usage.used_tokens / usage.max_tokens) * 100), 100),
+      });
     });
-  }, [activeConversationId, activeConversation?.context_compression, getCompressionSummary, messages]);
+    return () => {
+      cancelled = true;
+    };
+  }, [activeConversationId, getContextUsage, messages]);
 
-  // TODO: Token estimation only considers loaded messages. When hasOlderMessages is true
-  // and no context-clear marker is found, the token estimate will be lower than actual.
-  // A proper fix would require the backend to return total token counts.
+  // Fallback only: local estimation sees loaded messages, so it can undercount
+  // paginated conversations when the backend usage query is unavailable.
   const contextTokenUsage = useMemo(() => {
+    if (serverContextUsage) return serverContextUsage;
+
     const maxTokens = currentModel?.max_tokens;
     if (!maxTokens) return null;
 
@@ -730,12 +749,9 @@ export function InputArea() {
       usedTokens += estimateTokens(activeConversation.system_prompt) + 4;
     }
 
-    // Add summary tokens
-    usedTokens += summaryTokenCount;
-
     const percent = Math.min(Math.round((usedTokens / maxTokens) * 100), 100);
     return { usedTokens, maxTokens, percent };
-  }, [messages, currentModel?.max_tokens, activeConversation?.system_prompt, summaryTokenCount]);
+  }, [messages, currentModel?.max_tokens, activeConversation?.system_prompt, serverContextUsage]);
 
   const { hasRealtimeVoice, hasReasoning, hasVision } = React.useMemo(() => ({
     hasRealtimeVoice: activeConversation
@@ -1689,7 +1705,12 @@ export function InputArea() {
                   </span>
                 }
               >
-                <svg width={size} height={size} style={{ display: 'block', cursor: 'pointer' }}>
+                <svg
+                  aria-label={t('chat.contextTokenUsage', '上下文 tokens')}
+                  width={size}
+                  height={size}
+                  style={{ display: 'block', cursor: 'pointer' }}
+                >
                   <circle cx={r + stroke} cy={r + stroke} r={r} fill="none" stroke={token.colorBorderSecondary} strokeWidth={stroke} />
                   <circle
                     cx={r + stroke} cy={r + stroke} r={r}

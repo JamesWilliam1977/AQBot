@@ -374,4 +374,11 @@ mod tests {
         assert_eq!(trimmed.len(), 1);
         assert_eq!(trimmed[0].role, "user");
     }
+
+    #[test]
+    fn deepseek_v4_flash_budget_does_not_auto_compress_below_threshold() {
+        let history = vec![text_message("user", &"token ".repeat(100_000))];
+
+        assert!(!should_auto_compress(&[], &history, Some(1_000_000)));
+    }
 }

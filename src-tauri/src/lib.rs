@@ -269,6 +269,7 @@ pub fn run() {
         commands::conversations::send_system_message,
         commands::conversations::compress_context,
         commands::conversations::get_compression_summary,
+        commands::conversations::get_context_usage,
         commands::conversations::delete_compression,
         commands::conversations::regenerate_conversation_title,
         // conversation categories

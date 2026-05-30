@@ -91,7 +91,7 @@ import { formatChatTime } from './chatTime';
 import { invoke } from '@/lib/invoke';
 import { registerHighlight } from 'stream-markdown';
 import { useResolvedAvatarSrc } from '@/hooks/useResolvedAvatarSrc';
-import type { Message, Attachment, ConversationStats } from '@/types';
+import type { Message, Attachment, ConversationStats, ConversationSummary } from '@/types';
 
 // ── markstream-react custom thinking component ──────────────────────────
 
@@ -1999,7 +1999,7 @@ export function ChatView() {
   const loadingOlder = useConversationStore((s) => s.loadingOlder);
   const hasOlderMessages = useConversationStore((s) => s.hasOlderMessages);
   const streaming = useConversationStore((s) => s.streaming);
-  const compressing = useConversationStore((s) => s.compressing);
+  const compressingConversationId = useConversationStore((s) => s.compressingConversationId);
   const streamingMessageId = useConversationStore((s) => s.streamingMessageId);
   const streamActivityByMessageId = useConversationStore((s) => s.streamActivityByMessageId);
   const multiModelParentId = useConversationStore((s) => s.multiModelParentId);
@@ -2022,6 +2022,7 @@ export function ChatView() {
   const deleteCompression = useConversationStore((s) => s.deleteCompression);
   const [summaryModalOpen, setSummaryModalOpen] = useState(false);
   const [summaryModalText, setSummaryModalText] = useState('');
+  const [summaryModalSummary, setSummaryModalSummary] = useState<ConversationSummary | null>(null);
   const [previewPayload, setPreviewPayload] = useState<CodeBlockPreviewPayload | null>(null);
   const [previewModalOpen, setPreviewModalOpen] = useState(false);
   const [mermaidPreviewSvg, setMermaidPreviewSvg] = useState<string | null>(null);
@@ -2072,7 +2073,16 @@ export function ChatView() {
   }, []);
 
   const activeConversation = conversations.find((c) => c.id === activeConversationId);
+  const compressing = compressingConversationId === activeConversationId;
   const isTitleGenerating = activeConversationId != null && titleGeneratingConversationId === activeConversationId;
+  const summaryBoundaryLabel = useMemo(() => {
+    const boundaryId = summaryModalSummary?.compressed_until_message_id;
+    if (!boundaryId) return null;
+    const boundaryIndex = messages.findIndex((message) => message.id === boundaryId);
+    if (boundaryIndex < 0) return boundaryId.slice(0, 8);
+    const boundaryMessage = messages[boundaryIndex];
+    return `#${boundaryIndex + 1} - ${formatChatTime(boundaryMessage.created_at)}`;
+  }, [messages, summaryModalSummary?.compressed_until_message_id]);
 
   const renderConvIconForChat = useCallback((size: number, modelId?: string | null) => {
     if (!activeConversation) return <Avatar icon={<Bot size={16} />} style={{ background: token.colorPrimary }} size={size} />;
@@ -3759,6 +3769,7 @@ export function ChatView() {
                 if (!convId) return;
                 const summary = await getCompressionSummary(convId);
                 setSummaryModalText(summary?.summary_text ?? t('chat.noSummary'));
+                setSummaryModalSummary(summary ?? null);
                 setSummaryModalOpen(true);
               }}
             >
@@ -4113,11 +4124,27 @@ export function ChatView() {
       <Modal
         title={t('chat.compressionSummary')}
         open={summaryModalOpen}
-        onCancel={() => setSummaryModalOpen(false)}
+        onCancel={() => {
+          setSummaryModalOpen(false);
+          setSummaryModalSummary(null);
+        }}
         footer={null}
         width={640}
       >
         <div style={{ maxHeight: 480, overflow: 'auto', padding: '8px 0' }}>
+          {summaryModalSummary && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+              {summaryModalSummary.model_used && (
+                <Tag>{t('chat.summaryModel', '模型')}: {summaryModalSummary.model_used}</Tag>
+              )}
+              {summaryModalSummary.token_count != null && (
+                <Tag>{t('chat.summaryTokens', '摘要 tokens')}: {summaryModalSummary.token_count.toLocaleString()}</Tag>
+              )}
+              {summaryBoundaryLabel && (
+                <Tag>{t('chat.summaryBoundary', '压缩到')}: {summaryBoundaryLabel}</Tag>
+              )}
+            </div>
+          )}
           <NodeRenderer
             content={summaryModalText}
             isDark={isDarkMode}

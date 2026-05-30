@@ -117,6 +117,29 @@ struct StreamTimeoutConfig {
     idle: Option<Duration>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ContextBoundary {
+    start_index: usize,
+    use_summary: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CompressionEvent {
+    conversation_id: String,
+    marker_message: Message,
+    summary: ConversationSummary,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ContextUsage {
+    used_tokens: u32,
+    max_tokens: Option<u32>,
+    threshold_tokens: Option<u32>,
+    has_summary: bool,
+    compressed_until_message_id: Option<String>,
+    messages_after_boundary: u32,
+}
+
 fn stream_timeout_config_from_settings(settings: &AppSettings) -> StreamTimeoutConfig {
     StreamTimeoutConfig {
         first_packet: duration_from_timeout_secs(settings.chat_stream_first_packet_timeout_secs),
@@ -883,6 +906,122 @@ fn is_context_boundary_marker(message: &Message) -> bool {
             || message.content == crate::context_manager::COMPRESSION_MARKER)
 }
 
+fn is_context_clear_marker(message: &Message) -> bool {
+    message.role == MessageRole::System && message.content == "<!-- context-clear -->"
+}
+
+fn is_context_compression_marker(message: &Message) -> bool {
+    message.role == MessageRole::System
+        && message.content == crate::context_manager::COMPRESSION_MARKER
+}
+
+fn legacy_context_start_index(
+    db_messages: &[Message],
+    stop_after_message_id: Option<&str>,
+) -> usize {
+    let stop_index = stop_after_message_id.and_then(|message_id| {
+        db_messages
+            .iter()
+            .position(|message| message.id == message_id)
+    });
+    let marker_search_end = stop_index.unwrap_or(db_messages.len());
+    db_messages[..marker_search_end]
+        .iter()
+        .rposition(is_context_boundary_marker)
+        .map(|idx| idx + 1)
+        .unwrap_or(0)
+}
+
+fn resolve_context_boundary(
+    db_messages: &[Message],
+    existing_summary: Option<&ConversationSummary>,
+) -> ContextBoundary {
+    let Some(summary) = existing_summary else {
+        return ContextBoundary {
+            start_index: legacy_context_start_index(db_messages, None),
+            use_summary: false,
+        };
+    };
+
+    if let Some(boundary_id) = summary.compressed_until_message_id.as_deref() {
+        if let Some(boundary_idx) = db_messages
+            .iter()
+            .position(|message| message.id == boundary_id)
+        {
+            if let Some(clear_idx) = db_messages
+                .iter()
+                .enumerate()
+                .skip(boundary_idx + 1)
+                .filter_map(|(idx, message)| is_context_clear_marker(message).then_some(idx))
+                .last()
+            {
+                return ContextBoundary {
+                    start_index: clear_idx + 1,
+                    use_summary: false,
+                };
+            }
+
+            return ContextBoundary {
+                start_index: boundary_idx + 1,
+                use_summary: true,
+            };
+        }
+    }
+
+    let marker_idx = db_messages.iter().rposition(is_context_boundary_marker);
+    ContextBoundary {
+        start_index: marker_idx.map(|idx| idx + 1).unwrap_or(0),
+        use_summary: marker_idx
+            .map(|idx| is_context_compression_marker(&db_messages[idx]))
+            .unwrap_or(true),
+    }
+}
+
+fn is_compressible_boundary_message(message: &Message) -> bool {
+    message.is_active
+        && message.status != "error"
+        && !is_context_boundary_marker(message)
+        && message.role != MessageRole::Tool
+}
+
+fn last_compressible_message_id_before(
+    db_messages: &[Message],
+    start_index: usize,
+    before_message_id: &str,
+) -> Option<String> {
+    let end_index = db_messages
+        .iter()
+        .position(|message| message.id == before_message_id)
+        .unwrap_or(db_messages.len());
+    db_messages
+        .iter()
+        .skip(start_index)
+        .take(end_index.saturating_sub(start_index))
+        .filter(|message| is_compressible_boundary_message(message))
+        .last()
+        .map(|message| message.id.clone())
+}
+
+fn last_compressible_message_id_from_start(
+    db_messages: &[Message],
+    start_index: usize,
+) -> Option<String> {
+    db_messages
+        .iter()
+        .skip(start_index)
+        .filter(|message| is_compressible_boundary_message(message))
+        .last()
+        .map(|message| message.id.clone())
+}
+
+fn count_compressible_messages_from_start(db_messages: &[Message], start_index: usize) -> u32 {
+    db_messages
+        .iter()
+        .skip(start_index)
+        .filter(|message| is_compressible_boundary_message(message))
+        .count() as u32
+}
+
 fn is_valid_provider_tool_call(tool_call: &ToolCall) -> bool {
     !tool_call.id.trim().is_empty()
         && !tool_call.call_type.trim().is_empty()
@@ -1017,17 +1156,27 @@ fn build_provider_context_messages(
     current_user_message_id: Option<&str>,
     stop_after_message_id: Option<&str>,
 ) -> aqbot_core::error::Result<Vec<ChatMessage>> {
-    let stop_index = stop_after_message_id.and_then(|message_id| {
-        db_messages
-            .iter()
-            .position(|message| message.id == message_id)
-    });
-    let marker_search_end = stop_index.unwrap_or(db_messages.len());
-    let marker_idx = db_messages[..marker_search_end]
-        .iter()
-        .rposition(is_context_boundary_marker);
-    let effective_start = marker_idx.map(|idx| idx + 1).unwrap_or(0);
+    let effective_start = legacy_context_start_index(db_messages, stop_after_message_id);
+    build_provider_context_messages_from_index(
+        file_store,
+        db_messages,
+        effective_start,
+        document_attachment_reading_enabled,
+        model_context_window,
+        current_user_message_id,
+        stop_after_message_id,
+    )
+}
 
+fn build_provider_context_messages_from_index(
+    file_store: &aqbot_core::file_store::FileStore,
+    db_messages: &[Message],
+    effective_start: usize,
+    document_attachment_reading_enabled: bool,
+    model_context_window: Option<u32>,
+    current_user_message_id: Option<&str>,
+    stop_after_message_id: Option<&str>,
+) -> aqbot_core::error::Result<Vec<ChatMessage>> {
     let mut tool_assistants_by_parent: HashMap<&str, Vec<&Message>> = HashMap::new();
     let mut tool_messages_by_parent: HashMap<&str, Vec<&Message>> = HashMap::new();
     let mut active_tool_call_ids_by_parent: HashMap<&str, HashSet<String>> = HashMap::new();
@@ -3423,9 +3572,24 @@ pub async fn send_message(
         });
     }
 
-    let history_messages = build_provider_context_messages(
+    // Load existing summary and resolve the real context boundary before
+    // building provider-facing history. New summaries use
+    // compressed_until_message_id; legacy summaries still fall back to marker
+    // placement.
+    let existing_summary =
+        aqbot_core::repo::conversation::get_summary(&state.sea_db, &conversation_id)
+            .await
+            .ok()
+            .flatten();
+    let context_boundary = resolve_context_boundary(&db_messages, existing_summary.as_ref());
+    let effective_existing_summary = existing_summary
+        .as_ref()
+        .filter(|_| context_boundary.use_summary);
+
+    let history_messages = build_provider_context_messages_from_index(
         &file_store,
         &db_messages,
+        context_boundary.start_index,
         document_attachment_reading_enabled,
         model_context_window,
         Some(&user_message.id),
@@ -3439,16 +3603,6 @@ pub async fn send_message(
     // Resolve proxy config early (needed for both summary generation and main request)
     let resolved_proxy = ProviderProxyConfig::resolve(&provider.proxy_config, &global_settings);
 
-    // Get model info for token budget and param overrides
-    // Get model context window for token budget (resolved_model fetched earlier)
-
-    // Load existing summary for this conversation
-    let existing_summary =
-        aqbot_core::repo::conversation::get_summary(&state.sea_db, &conversation_id)
-            .await
-            .ok()
-            .flatten();
-
     // Auto-compression: if enabled and tokens exceed threshold, compress now
     if conversation.context_compression
         && !history_messages.is_empty()
@@ -3460,6 +3614,11 @@ pub async fn send_message(
     {
         let (messages_to_compress, post_compression_history) =
             split_auto_compression_history(&history_messages, current_user_history_index);
+        let compressed_until_message_id = last_compressible_message_id_before(
+            &db_messages,
+            context_boundary.start_index,
+            &user_message.id,
+        );
         // Perform synchronous compression before sending
         let compression_result = if messages_to_compress.is_empty() {
             None
@@ -3468,7 +3627,8 @@ pub async fn send_message(
                 &state.sea_db,
                 &conversation_id,
                 &messages_to_compress,
-                existing_summary.as_ref().map(|s| s.summary_text.as_str()),
+                effective_existing_summary.map(|s| s.summary_text.as_str()),
+                compressed_until_message_id.as_deref(),
                 &provider,
                 &decrypted_key,
                 &key_row.id,
@@ -3482,9 +3642,9 @@ pub async fn send_message(
             .ok()
         };
 
-        if let Some(summary_text) = compression_result {
+        if let Some(summary) = compression_result {
             // Insert compression marker
-            let _ = aqbot_core::repo::message::create_message(
+            let marker_message = aqbot_core::repo::message::create_message(
                 &state.sea_db,
                 &conversation_id,
                 MessageRole::System,
@@ -3496,17 +3656,23 @@ pub async fn send_message(
             .await;
 
             // Emit marker to frontend
-            let _ = app.emit(
-                &format!("conversation:compressed:{}", conversation_id),
-                &summary_text,
-            );
+            if let Ok(marker_message) = marker_message {
+                let _ = app.emit(
+                    "conversation:compressed",
+                    CompressionEvent {
+                        conversation_id: conversation_id.clone(),
+                        marker_message,
+                        summary: summary.clone(),
+                    },
+                );
+            }
 
             // After compression, history is now empty (marker splits it)
             // Context = system + summary + current user message only
             chat_messages = crate::context_manager::build_context(
                 &chat_messages,
                 &post_compression_history,
-                Some(&summary_text),
+                Some(&summary.summary_text),
                 model_context_window,
             );
         } else {
@@ -3514,7 +3680,7 @@ pub async fn send_message(
             chat_messages = crate::context_manager::build_context(
                 &chat_messages,
                 &history_messages,
-                existing_summary.as_ref().map(|s| s.summary_text.as_str()),
+                effective_existing_summary.map(|s| s.summary_text.as_str()),
                 model_context_window,
             );
         }
@@ -3523,7 +3689,7 @@ pub async fn send_message(
         chat_messages = crate::context_manager::build_context(
             &chat_messages,
             &history_messages,
-            existing_summary.as_ref().map(|s| s.summary_text.as_str()),
+            effective_existing_summary.map(|s| s.summary_text.as_str()),
             model_context_window,
         );
     }
@@ -3807,16 +3973,30 @@ pub async fn regenerate_message(
         tag
     };
 
-    chat_messages.extend(
-        build_provider_context_messages(
-            &file_store,
-            &remaining_messages,
-            document_attachment_reading_enabled,
-            model_context_window,
-            Some(&last_user_msg.id),
-            Some(&last_user_msg.id),
-        )
-        .map_err(|e| e.to_string())?,
+    let existing_summary =
+        aqbot_core::repo::conversation::get_summary(&state.sea_db, &conversation_id)
+            .await
+            .ok()
+            .flatten();
+    let context_boundary = resolve_context_boundary(&remaining_messages, existing_summary.as_ref());
+    let effective_existing_summary = existing_summary
+        .as_ref()
+        .filter(|_| context_boundary.use_summary);
+    let history_messages = build_provider_context_messages_from_index(
+        &file_store,
+        &remaining_messages,
+        context_boundary.start_index,
+        document_attachment_reading_enabled,
+        model_context_window,
+        Some(&last_user_msg.id),
+        Some(&last_user_msg.id),
+    )
+    .map_err(|e| e.to_string())?;
+    chat_messages = crate::context_manager::build_context(
+        &chat_messages,
+        &history_messages,
+        effective_existing_summary.map(|s| s.summary_text.as_str()),
+        model_context_window,
     );
 
     let resolved_proxy = ProviderProxyConfig::resolve(&provider.proxy_config, &global_settings);
@@ -4107,16 +4287,30 @@ pub async fn regenerate_with_model(
         tag
     };
 
-    chat_messages.extend(
-        build_provider_context_messages(
-            &file_store,
-            &remaining_messages,
-            document_attachment_reading_enabled,
-            model_context_window,
-            Some(&user_msg.id),
-            Some(&user_msg.id),
-        )
-        .map_err(|e| e.to_string())?,
+    let existing_summary =
+        aqbot_core::repo::conversation::get_summary(&state.sea_db, &conversation_id)
+            .await
+            .ok()
+            .flatten();
+    let context_boundary = resolve_context_boundary(&remaining_messages, existing_summary.as_ref());
+    let effective_existing_summary = existing_summary
+        .as_ref()
+        .filter(|_| context_boundary.use_summary);
+    let history_messages = build_provider_context_messages_from_index(
+        &file_store,
+        &remaining_messages,
+        context_boundary.start_index,
+        document_attachment_reading_enabled,
+        model_context_window,
+        Some(&user_msg.id),
+        Some(&user_msg.id),
+    )
+    .map_err(|e| e.to_string())?;
+    chat_messages = crate::context_manager::build_context(
+        &chat_messages,
+        &history_messages,
+        effective_existing_summary.map(|s| s.summary_text.as_str()),
+        model_context_window,
     );
 
     let resolved_proxy = ProviderProxyConfig::resolve(&provider.proxy_config, &global_settings);
@@ -4328,6 +4522,7 @@ async fn do_compress(
     conversation_id: &str,
     history_messages: &[ChatMessage],
     existing_summary: Option<&str>,
+    compressed_until_message_id: Option<&str>,
     provider: &ProviderConfig,
     decrypted_key: &str,
     key_id: &str,
@@ -4336,7 +4531,7 @@ async fn do_compress(
     use_max_completion_tokens: Option<bool>,
     settings: &AppSettings,
     master_key: &[u8; 32],
-) -> Result<String, String> {
+) -> Result<ConversationSummary, String> {
     // Resolve compression model: settings override → fallback to conversation model
     let (comp_provider, comp_key, comp_key_id, comp_proxy, comp_model_id, comp_use_max) = if let (
         Some(ref pid),
@@ -4457,11 +4652,11 @@ async fn do_compress(
         .map_err(|e| format!("Summary generation failed: {}", e))?;
 
     let token_count = aqbot_core::token_counter::estimate_tokens(&response.content);
-    aqbot_core::repo::conversation::upsert_summary(
+    let summary = aqbot_core::repo::conversation::upsert_summary(
         db,
         conversation_id,
         &response.content,
-        None,
+        compressed_until_message_id,
         Some(token_count as u32),
         Some(&comp_model_id),
     )
@@ -4473,7 +4668,7 @@ async fn do_compress(
         conversation_id,
         token_count
     );
-    Ok(response.content)
+    Ok(summary)
 }
 
 /// Tauri command: manually compress the current conversation context.
@@ -4515,12 +4710,19 @@ pub async fn compress_context(
 
     let file_store = aqbot_core::file_store::FileStore::new();
 
-    // For manual compression: try messages after last marker first,
-    // fall back to ALL messages if nothing after marker
-    let marker_idx = db_messages.iter().rposition(is_context_boundary_marker);
-    let mut history_messages = build_provider_context_messages(
+    // For manual compression: try messages after the effective summary/marker
+    // boundary first, then fall back to all visible messages if nothing remains.
+    let existing_summary =
+        aqbot_core::repo::conversation::get_summary(&state.sea_db, &conversation_id)
+            .await
+            .ok()
+            .flatten();
+    let context_boundary = resolve_context_boundary(&db_messages, existing_summary.as_ref());
+    let mut boundary_start_index = context_boundary.start_index;
+    let mut history_messages = build_provider_context_messages_from_index(
         &file_store,
         &db_messages,
+        boundary_start_index,
         global_settings.document_attachment_reading_enabled,
         None,
         None,
@@ -4528,13 +4730,14 @@ pub async fn compress_context(
     )
     .map_err(|e| e.to_string())?;
 
-    // If nothing after the last marker, try all messages
-    if history_messages.is_empty() && marker_idx.is_some() {
+    // If nothing after the last boundary, try all messages.
+    if history_messages.is_empty() && boundary_start_index > 0 {
         let all_without_markers = db_messages
             .iter()
             .filter(|message| !is_context_boundary_marker(message))
             .cloned()
             .collect::<Vec<_>>();
+        boundary_start_index = 0;
         history_messages = build_provider_context_messages(
             &file_store,
             &all_without_markers,
@@ -4549,13 +4752,11 @@ pub async fn compress_context(
     if history_messages.is_empty() {
         return Err("No messages to compress".to_string());
     }
-
-    // Load existing summary
-    let existing_summary =
-        aqbot_core::repo::conversation::get_summary(&state.sea_db, &conversation_id)
-            .await
-            .ok()
-            .flatten();
+    let compressed_until_message_id =
+        last_compressible_message_id_from_start(&db_messages, boundary_start_index);
+    let effective_existing_summary = existing_summary
+        .as_ref()
+        .filter(|_| context_boundary.use_summary);
 
     // Compress
     let use_max_completion_tokens = aqbot_core::repo::provider::get_model(
@@ -4568,11 +4769,12 @@ pub async fn compress_context(
     .and_then(|m| m.param_overrides)
     .and_then(|p| p.use_max_completion_tokens);
 
-    do_compress(
+    let summary = do_compress(
         &state.sea_db,
         &conversation_id,
         &history_messages,
-        existing_summary.as_ref().map(|s| s.summary_text.as_str()),
+        effective_existing_summary.map(|s| s.summary_text.as_str()),
+        compressed_until_message_id.as_deref(),
         &provider,
         &decrypted_key,
         &key_row.id,
@@ -4599,15 +4801,13 @@ pub async fn compress_context(
 
     // Emit events to frontend
     let _ = app.emit(
-        &format!("conversation:compressed:{}", conversation_id),
-        &marker_msg,
+        "conversation:compressed",
+        CompressionEvent {
+            conversation_id: conversation_id.clone(),
+            marker_message: marker_msg,
+            summary: summary.clone(),
+        },
     );
-
-    // Return the updated summary
-    let summary = aqbot_core::repo::conversation::get_summary(&state.sea_db, &conversation_id)
-        .await
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "Summary not found after compression".to_string())?;
 
     Ok(summary)
 }
@@ -4621,6 +4821,89 @@ pub async fn get_compression_summary(
     aqbot_core::repo::conversation::get_summary(&state.sea_db, &conversation_id)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Tauri command: return server-side context usage for a conversation.
+#[tauri::command]
+pub async fn get_context_usage(
+    state: State<'_, AppState>,
+    conversation_id: String,
+) -> Result<ContextUsage, String> {
+    let conversation =
+        aqbot_core::repo::conversation::get_conversation(&state.sea_db, &conversation_id)
+            .await
+            .map_err(|e| e.to_string())?;
+    let resolved_model = aqbot_core::repo::provider::get_model(
+        &state.sea_db,
+        &conversation.provider_id,
+        &conversation.model_id,
+    )
+    .await
+    .ok();
+    let model_context_window = resolved_model.as_ref().and_then(|m| m.max_tokens);
+    let global_settings = aqbot_core::repo::settings::get_settings(&state.sea_db)
+        .await
+        .unwrap_or_default();
+    let db_messages =
+        aqbot_core::repo::message::list_messages_for_model_context(&state.sea_db, &conversation_id)
+            .await
+            .map_err(|e| e.to_string())?;
+    let existing_summary =
+        aqbot_core::repo::conversation::get_summary(&state.sea_db, &conversation_id)
+            .await
+            .ok()
+            .flatten();
+    let context_boundary = resolve_context_boundary(&db_messages, existing_summary.as_ref());
+    let effective_existing_summary = existing_summary
+        .as_ref()
+        .filter(|_| context_boundary.use_summary);
+
+    let file_store = aqbot_core::file_store::FileStore::new();
+    let history_messages = build_provider_context_messages_from_index(
+        &file_store,
+        &db_messages,
+        context_boundary.start_index,
+        global_settings.document_attachment_reading_enabled,
+        model_context_window,
+        None,
+        None,
+    )
+    .map_err(|e| e.to_string())?;
+
+    let mut system_messages = Vec::new();
+    if let Some(system_prompt) = resolve_system_prompt(&state.sea_db, &conversation).await {
+        system_messages.push(ChatMessage {
+            role: "system".to_string(),
+            content: ChatContent::Text(system_prompt),
+            reasoning_content: None,
+            tool_calls: None,
+            tool_call_id: None,
+        });
+    }
+    let context_messages = crate::context_manager::build_context(
+        &system_messages,
+        &history_messages,
+        effective_existing_summary.map(|s| s.summary_text.as_str()),
+        model_context_window,
+    );
+    let used_tokens = context_messages
+        .iter()
+        .map(crate::context_manager::message_tokens)
+        .sum::<usize>() as u32;
+    let threshold_tokens = model_context_window.map(|window| (window as f64 * 0.70) as u32);
+
+    Ok(ContextUsage {
+        used_tokens,
+        max_tokens: model_context_window,
+        threshold_tokens,
+        has_summary: effective_existing_summary.is_some(),
+        compressed_until_message_id: effective_existing_summary
+            .and_then(|summary| summary.compressed_until_message_id.clone()),
+        messages_after_boundary: count_compressible_messages_from_start(
+            &db_messages,
+            context_boundary.start_index,
+        ),
+    })
 }
 
 /// Tauri command: delete the compression summary and all marker messages.
@@ -4801,6 +5084,19 @@ mod tests {
             version_index,
             is_active,
             status: "complete".into(),
+        }
+    }
+
+    fn test_summary(boundary_message_id: Option<&str>) -> ConversationSummary {
+        ConversationSummary {
+            id: "summary-1".to_string(),
+            conversation_id: "conv-1".to_string(),
+            summary_text: "compressed old context".to_string(),
+            compressed_until_message_id: boundary_message_id.map(str::to_string),
+            token_count: Some(12),
+            model_used: Some("summary-model".to_string()),
+            created_at: 1,
+            updated_at: 1,
         }
     }
 
@@ -5182,6 +5478,143 @@ mod tests {
         assert_eq!(context[1].tool_calls.as_ref().unwrap()[0].id, "call-1");
         assert_eq!(context[2].tool_call_id.as_deref(), Some("call-1"));
         assert_eq!(context[3].reasoning_content, None);
+    }
+
+    #[test]
+    fn summary_boundary_keeps_messages_after_compressed_until_even_when_marker_is_later() {
+        let file_store = aqbot_core::file_store::FileStore::new();
+        let messages = vec![
+            test_message(
+                "old-user",
+                MessageRole::User,
+                "old user",
+                None,
+                0,
+                true,
+                None,
+                None,
+            ),
+            test_message(
+                "old-assistant",
+                MessageRole::Assistant,
+                "old assistant",
+                Some("old-user"),
+                0,
+                true,
+                None,
+                None,
+            ),
+            test_message(
+                "current-user",
+                MessageRole::User,
+                "current user that triggered compression",
+                None,
+                0,
+                true,
+                None,
+                None,
+            ),
+            test_message(
+                "compression-marker",
+                MessageRole::System,
+                crate::context_manager::COMPRESSION_MARKER,
+                None,
+                0,
+                true,
+                None,
+                None,
+            ),
+            test_message(
+                "current-assistant",
+                MessageRole::Assistant,
+                "answer after compression",
+                Some("current-user"),
+                0,
+                true,
+                None,
+                None,
+            ),
+        ];
+        let summary = test_summary(Some("old-assistant"));
+        let boundary = resolve_context_boundary(&messages, Some(&summary));
+
+        assert!(boundary.use_summary);
+        let context = build_provider_context_messages_from_index(
+            &file_store,
+            &messages,
+            boundary.start_index,
+            false,
+            None,
+            Some("current-user"),
+            None,
+        )
+        .unwrap();
+
+        let text = context
+            .iter()
+            .filter_map(|message| match &message.content {
+                ChatContent::Text(content) => Some(content.as_str()),
+                ChatContent::Multipart(_) => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            text,
+            vec![
+                "current user that triggered compression",
+                "answer after compression"
+            ]
+        );
+    }
+
+    #[test]
+    fn context_clear_after_summary_boundary_disables_old_summary() {
+        let messages = vec![
+            test_message(
+                "old-user",
+                MessageRole::User,
+                "old user",
+                None,
+                0,
+                true,
+                None,
+                None,
+            ),
+            test_message(
+                "old-assistant",
+                MessageRole::Assistant,
+                "old assistant",
+                Some("old-user"),
+                0,
+                true,
+                None,
+                None,
+            ),
+            test_message(
+                "clear-marker",
+                MessageRole::System,
+                "<!-- context-clear -->",
+                None,
+                0,
+                true,
+                None,
+                None,
+            ),
+            test_message(
+                "new-user",
+                MessageRole::User,
+                "new user",
+                None,
+                0,
+                true,
+                None,
+                None,
+            ),
+        ];
+        let summary = test_summary(Some("old-assistant"));
+        let boundary = resolve_context_boundary(&messages, Some(&summary));
+
+        assert!(!boundary.use_summary);
+        assert_eq!(boundary.start_index, 3);
     }
 
     #[test]

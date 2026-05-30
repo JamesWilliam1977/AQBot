@@ -28,6 +28,8 @@ import type {
   AttachmentInput,
   ConversationSearchResult,
   ConversationSummary,
+  CompressionEvent,
+  ContextUsage,
   UpdateConversationInput,
   ChatStreamEvent,
   ChatStreamErrorEvent,
@@ -867,7 +869,7 @@ interface ConversationState {
   totalActiveCount: number;
   oldestLoadedMessageId: string | null;
   streaming: boolean;
-  compressing: boolean;
+  compressingConversationId: string | null;
   streamingMessageId: string | null;
   streamingConversationId: string | null;
   activeStreamId: string | null;
@@ -908,6 +910,8 @@ interface ConversationState {
   compressContext: () => Promise<void>;
   /** Get the compression summary for a conversation */
   getCompressionSummary: (conversationId: string) => Promise<ConversationSummary | null>;
+  /** Get server-side context usage for a conversation */
+  getContextUsage: (conversationId: string) => Promise<ContextUsage | null>;
   /** Delete the compression summary and all marker messages */
   deleteCompression: () => Promise<void>;
   fetchConversations: () => Promise<void>;
@@ -1187,7 +1191,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
   totalActiveCount: 0,
   oldestLoadedMessageId: null,
   streaming: false,
-  compressing: false,
+  compressingConversationId: null,
   streamingMessageId: null,
   streamingConversationId: null,
   activeStreamId: null,
@@ -1427,7 +1431,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
   compressContext: async () => {
     const conversationId = get().activeConversationId;
     if (!conversationId) return;
-    set({ compressing: true });
+    set({ compressingConversationId: conversationId });
     try {
       await invoke<ConversationSummary>('compress_context', { conversationId });
       // Reload messages to get the new compression marker
@@ -1436,15 +1440,19 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
         limit: 100,
         beforeMessageId: null,
       });
-      set({
-        messages: page.messages,
-        hasOlderMessages: page.has_older,
-        totalActiveCount: page.total_active_count,
-        oldestLoadedMessageId: page.messages.length > 0 ? page.messages[0].id : null,
-        compressing: false,
-      });
+      set((s) => ({
+        ...(s.activeConversationId === conversationId
+          ? {
+            messages: page.messages,
+            hasOlderMessages: page.has_older,
+            totalActiveCount: page.total_active_count,
+            oldestLoadedMessageId: page.messages.length > 0 ? page.messages[0].id : null,
+          }
+          : {}),
+        compressingConversationId: null,
+      }));
     } catch (e) {
-      set({ compressing: false });
+      set({ compressingConversationId: null });
       console.error('Failed to compress context:', e);
       throw e;
     }
@@ -1455,6 +1463,15 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
       return await invoke<ConversationSummary | null>('get_compression_summary', { conversationId });
     } catch (e) {
       console.error('Failed to get compression summary:', e);
+      return null;
+    }
+  },
+
+  getContextUsage: async (conversationId: string) => {
+    try {
+      return await invoke<ContextUsage>('get_context_usage', { conversationId });
+    } catch (e) {
+      console.error('Failed to get context usage:', e);
       return null;
     }
   },
@@ -3440,6 +3457,22 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
       }
     });
 
+    const compressionUnsub = await listen<CompressionEvent>('conversation:compressed', (event) => {
+      if (_listenerGen !== gen) return;
+      const { conversation_id, marker_message } = event.payload;
+      if (get().activeConversationId !== conversation_id) {
+        _pendingConversationRefresh.add(conversation_id);
+        return;
+      }
+      set((s) => {
+        if (s.messages.some((message) => message.id === marker_message.id)) return {};
+        const messages = [...s.messages, marker_message].sort((left, right) => (
+          left.created_at - right.created_at || left.id.localeCompare(right.id)
+        ));
+        return { messages };
+      });
+    });
+
     // If generation changed while awaiting, this listener set is stale
     if (_listenerGen !== gen) {
       chunkUnsub();
@@ -3447,6 +3480,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
       titleUnsub();
       titleGenUnsub();
       ragUnsub();
+      compressionUnsub();
       return;
     }
 
@@ -3456,6 +3490,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
       titleUnsub();
       titleGenUnsub();
       ragUnsub();
+      compressionUnsub();
     };
   },
 
