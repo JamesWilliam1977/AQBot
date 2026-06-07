@@ -133,6 +133,7 @@ const PATH_SETTING_KEYS: &[&str] = &[
     "backup_dir",
     "gateway_ssl_cert_path",
     "gateway_ssl_key_path",
+    "agent_workspace_root",
 ];
 
 /// Migrate hardcoded absolute paths in settings to use dynamic variables.

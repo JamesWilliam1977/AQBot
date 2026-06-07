@@ -457,6 +457,13 @@ export interface GatewaySettings {
 
 // === Settings ===
 export const DEFAULT_MCP_TOOL_LOOP_MAX_ITERATIONS = 100;
+export const DEFAULT_AGENT_WORKSPACE_NAME_STRATEGY = 'uuid';
+export const DEFAULT_AGENT_WORKSPACE_DATETIME_FORMAT = 'YYYY-MM-DD-HH-mm-ss';
+export type AgentWorkspaceNameStrategy =
+  | 'uuid'
+  | 'conversation_id'
+  | 'created_timestamp'
+  | 'created_datetime';
 
 export interface AppSettings {
   language: string;
@@ -583,6 +590,12 @@ export interface AppSettings {
   multi_model_display_mode?: 'tabs' | 'side-by-side' | 'stacked';
   /** Render user messages as Markdown (like AI messages). Default: false */
   render_user_markdown?: boolean;
+  /** Agent default workspace root. Null uses ~/.aqbot/workspace. */
+  agent_workspace_root?: string | null;
+  /** Agent workspace subdirectory naming strategy. Default: uuid. */
+  agent_workspace_name_strategy?: AgentWorkspaceNameStrategy;
+  /** Agent workspace datetime naming format. Default: YYYY-MM-DD-HH-mm-ss. */
+  agent_workspace_datetime_format?: string | null;
 }
 
 // === Streaming ===
