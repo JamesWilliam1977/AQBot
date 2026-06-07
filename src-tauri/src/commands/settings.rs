@@ -15,6 +15,8 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<AppSettings, Str
         aqbot_core::path_vars::decode_path_opt(&settings.gateway_ssl_cert_path);
     settings.gateway_ssl_key_path =
         aqbot_core::path_vars::decode_path_opt(&settings.gateway_ssl_key_path);
+    settings.agent_workspace_root =
+        aqbot_core::path_vars::decode_path_opt(&settings.agent_workspace_root);
     Ok(settings)
 }
 
@@ -29,6 +31,8 @@ pub async fn save_settings(
         aqbot_core::path_vars::encode_path_opt(&settings.gateway_ssl_cert_path);
     settings.gateway_ssl_key_path =
         aqbot_core::path_vars::encode_path_opt(&settings.gateway_ssl_key_path);
+    settings.agent_workspace_root =
+        aqbot_core::path_vars::encode_path_opt(&settings.agent_workspace_root);
     aqbot_core::repo::settings::save_settings(&state.sea_db, &settings)
         .await
         .map_err(|e| e.to_string())?;

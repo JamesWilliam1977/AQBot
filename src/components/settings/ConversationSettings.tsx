@@ -1,7 +1,14 @@
-import { Divider, Input, InputNumber, Switch, theme } from 'antd';
+import { Button, Divider, Input, InputNumber, Switch, theme } from 'antd';
+import { FolderOpen, RotateCcw } from 'lucide-react';
+import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSettingsStore } from '@/stores';
-import { DEFAULT_MCP_TOOL_LOOP_MAX_ITERATIONS } from '@/types';
+import {
+  DEFAULT_AGENT_WORKSPACE_DATETIME_FORMAT,
+  DEFAULT_AGENT_WORKSPACE_NAME_STRATEGY,
+  DEFAULT_MCP_TOOL_LOOP_MAX_ITERATIONS,
+  type AgentWorkspaceNameStrategy,
+} from '@/types';
 import { useSystemFonts } from '@/hooks/useSystemFonts';
 import { SettingsGroup } from './SettingsGroup';
 import { SettingsSelect } from './SettingsSelect';
@@ -47,6 +54,35 @@ function normalizeChatFontWeight(value: number | string | null) {
   return Math.min(CHAT_FONT_WEIGHT_MAX, Math.max(CHAT_FONT_WEIGHT_MIN, Math.round(numericValue)));
 }
 
+function previewAgentWorkspaceName(strategy: AgentWorkspaceNameStrategy, format: string) {
+  switch (strategy) {
+    case 'created_timestamp':
+      return '1700000000';
+    case 'created_datetime':
+      return sanitizeAgentWorkspacePreview(
+        (format || DEFAULT_AGENT_WORKSPACE_DATETIME_FORMAT)
+          .replace(/YYYY/g, '2023')
+          .replace(/MM/g, '11')
+          .replace(/DD/g, '14')
+          .replace(/HH/g, '22')
+          .replace(/mm/g, '13')
+          .replace(/ss/g, '20'),
+      );
+    case 'conversation_id':
+      return 'conv-550e8400';
+    case 'uuid':
+    default:
+      return '550e8400-e29b-41d4-a716-446655440000';
+  }
+}
+
+function sanitizeAgentWorkspacePreview(value: string) {
+  return value
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^[-. ]+|[-. ]+$/g, '') || 'workspace';
+}
+
 export function ConversationSettings() {
   const { t } = useTranslation();
   const settings = useSettingsStore((s) => s.settings);
@@ -54,6 +90,28 @@ export function ConversationSettings() {
   const { token } = theme.useToken();
   const systemFonts = useSystemFonts();
   const rowStyle = { padding: '4px 0' };
+  const agentWorkspaceStrategy = settings.agent_workspace_name_strategy ?? DEFAULT_AGENT_WORKSPACE_NAME_STRATEGY;
+  const agentWorkspaceDatetimeFormat = settings.agent_workspace_datetime_format ?? DEFAULT_AGENT_WORKSPACE_DATETIME_FORMAT;
+  const agentWorkspacePreview = useMemo(
+    () => previewAgentWorkspaceName(agentWorkspaceStrategy, agentWorkspaceDatetimeFormat),
+    [agentWorkspaceStrategy, agentWorkspaceDatetimeFormat],
+  );
+
+  const handleSelectAgentWorkspaceRoot = async () => {
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: t('settings.agentWorkspaceRoot'),
+      });
+      if (selected && typeof selected === 'string') {
+        await saveSettings({ agent_workspace_root: selected });
+      }
+    } catch (e) {
+      console.warn('Failed to select agent workspace root:', e);
+    }
+  };
 
   const fontOptions = [
     { label: t('settings.fontDefault'), value: '' },
@@ -209,6 +267,69 @@ export function ConversationSettings() {
             checked={settings.inherit_conversation_preferences_on_create ?? true}
             onChange={(checked) => saveSettings({ inherit_conversation_preferences_on_create: checked })}
           />
+        </div>
+      </SettingsGroup>
+
+      <SettingsGroup title={t('settings.agentSettings')}>
+        <div style={{ fontSize: 12, color: token.colorTextDescription, marginBottom: 12 }}>
+          {t('settings.agentWorkspaceRootDesc')}
+        </div>
+        <div className="flex items-center justify-between gap-3" style={rowStyle}>
+          <span>{t('settings.agentWorkspaceRoot')}</span>
+          <div className="flex items-center gap-2" style={{ minWidth: 0, flex: 1, justifyContent: 'flex-end' }}>
+            <Input
+              aria-label={t('settings.agentWorkspaceRoot')}
+              value={settings.agent_workspace_root ?? ''}
+              onChange={(e) => saveSettings({ agent_workspace_root: e.target.value.trim() || null })}
+              placeholder={t('settings.agentWorkspaceRootPlaceholder')}
+              style={{ maxWidth: 360 }}
+            />
+            <Button
+              aria-label={t('settings.selectAgentWorkspaceRoot')}
+              icon={<FolderOpen size={14} />}
+              onClick={handleSelectAgentWorkspaceRoot}
+            />
+            <Button
+              aria-label={t('settings.resetAgentWorkspaceRoot')}
+              icon={<RotateCcw size={14} />}
+              onClick={() => saveSettings({ agent_workspace_root: null })}
+            />
+          </div>
+        </div>
+        <Divider style={{ margin: '4px 0' }} />
+        <div className="flex items-center justify-between" style={rowStyle}>
+          <span>{t('settings.agentWorkspaceNameStrategy')}</span>
+          <SettingsSelect
+            value={agentWorkspaceStrategy}
+            onChange={(val) => saveSettings({ agent_workspace_name_strategy: val as AgentWorkspaceNameStrategy })}
+            options={[
+              { label: t('settings.agentWorkspaceNameStrategyUuid'), value: 'uuid' },
+              { label: t('settings.agentWorkspaceNameStrategyConversationId'), value: 'conversation_id' },
+              { label: t('settings.agentWorkspaceNameStrategyCreatedTimestamp'), value: 'created_timestamp' },
+              { label: t('settings.agentWorkspaceNameStrategyCreatedDatetime'), value: 'created_datetime' },
+            ]}
+          />
+        </div>
+        <Divider style={{ margin: '4px 0' }} />
+        <div className="flex items-center justify-between gap-3" style={rowStyle}>
+          <div>
+            <div>{t('settings.agentWorkspaceDatetimeFormat')}</div>
+            <div style={{ fontSize: 12, color: token.colorTextDescription }}>
+              {t('settings.agentWorkspaceDatetimeFormatDesc')}
+            </div>
+          </div>
+          <Input
+            aria-label={t('settings.agentWorkspaceDatetimeFormat')}
+            value={agentWorkspaceDatetimeFormat}
+            onChange={(e) => saveSettings({
+              agent_workspace_datetime_format: e.target.value || DEFAULT_AGENT_WORKSPACE_DATETIME_FORMAT,
+            })}
+            style={{ width: 220 }}
+          />
+        </div>
+        <Divider style={{ margin: '4px 0' }} />
+        <div style={{ fontSize: 12, color: token.colorTextDescription, padding: '4px 0' }}>
+          {t('settings.agentWorkspacePreview', { value: agentWorkspacePreview })}
         </div>
       </SettingsGroup>
 

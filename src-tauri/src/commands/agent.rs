@@ -13,6 +13,7 @@ use open_agent_sdk::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, Mutex};
 use tauri::{Emitter, State};
 use tokio::sync::RwLock;
@@ -21,6 +22,9 @@ use tokio::sync::RwLock;
 /// Used as the source of truth for concurrency checks (more reliable than DB status).
 static RUNNING_AGENTS: LazyLock<Mutex<HashMap<String, String>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+const DEFAULT_AGENT_WORKSPACE_DATETIME_FORMAT: &str = "YYYY-MM-DD-HH-mm-ss";
+const MAX_AGENT_WORKSPACE_NAME_LEN: usize = 80;
 
 /// RAII guard that removes a conversation ID from RUNNING_AGENTS on drop.
 /// Ensures cleanup even if the spawned task panics.
@@ -52,6 +56,168 @@ impl Drop for AgentCancelTokenGuard {
             tokens.lock().await.remove(&conversation_id);
         });
     }
+}
+
+fn agent_workspace_root(settings: &AppSettings) -> PathBuf {
+    settings
+        .agent_workspace_root
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| crate::paths::aqbot_home().join("workspace"))
+}
+
+fn agent_workspace_dir_name(
+    conv: &aqbot_core::types::Conversation,
+    settings: &AppSettings,
+) -> String {
+    let raw = match settings.agent_workspace_name_strategy.as_str() {
+        "conversation_id" | "uuid" => conv.id.clone(),
+        "created_timestamp" => conv.created_at.to_string(),
+        "created_datetime" => {
+            let format = settings
+                .agent_workspace_datetime_format
+                .as_deref()
+                .map(str::trim)
+                .filter(|format| !format.is_empty())
+                .unwrap_or(DEFAULT_AGENT_WORKSPACE_DATETIME_FORMAT);
+            format_agent_workspace_datetime(conv.created_at, format)
+        }
+        _ => conv.id.clone(),
+    };
+
+    sanitize_workspace_dir_name(&raw)
+}
+
+fn format_agent_workspace_datetime(timestamp: i64, format: &str) -> String {
+    use chrono::{Local, TimeZone};
+
+    let dt = Local
+        .timestamp_opt(timestamp, 0)
+        .single()
+        .or_else(|| Local.timestamp_opt(0, 0).single())
+        .expect("local epoch timestamp should be valid");
+
+    format
+        .replace("YYYY", &dt.format("%Y").to_string())
+        .replace("MM", &dt.format("%m").to_string())
+        .replace("DD", &dt.format("%d").to_string())
+        .replace("HH", &dt.format("%H").to_string())
+        .replace("mm", &dt.format("%M").to_string())
+        .replace("ss", &dt.format("%S").to_string())
+}
+
+fn sanitize_workspace_dir_name(raw: &str) -> String {
+    let mut sanitized = String::with_capacity(raw.len().min(MAX_AGENT_WORKSPACE_NAME_LEN));
+    let mut last_was_dash = false;
+
+    for ch in raw.chars() {
+        let safe = if ch.is_control()
+            || matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
+        {
+            '-'
+        } else {
+            ch
+        };
+
+        if safe == '-' {
+            if !last_was_dash {
+                sanitized.push('-');
+                last_was_dash = true;
+            }
+        } else {
+            sanitized.push(safe);
+            last_was_dash = false;
+        }
+    }
+
+    let trimmed = sanitized.trim_matches(|ch| matches!(ch, '-' | '.' | ' '));
+    let bounded = truncate_workspace_name(
+        if trimmed.is_empty() {
+            "workspace"
+        } else {
+            trimmed
+        },
+        MAX_AGENT_WORKSPACE_NAME_LEN,
+    );
+    let final_name = bounded
+        .trim_matches(|ch| matches!(ch, '-' | '.' | ' '))
+        .to_string();
+
+    if final_name.is_empty() {
+        "workspace".to_string()
+    } else {
+        final_name
+    }
+}
+
+fn truncate_workspace_name(value: &str, max_len: usize) -> String {
+    let mut output = String::new();
+    for ch in value.chars() {
+        if output.len() + ch.len_utf8() > max_len {
+            break;
+        }
+        output.push(ch);
+    }
+    output
+}
+
+fn resolve_agent_workspace_dir(
+    settings: &AppSettings,
+    conv: &aqbot_core::types::Conversation,
+) -> PathBuf {
+    let root = agent_workspace_root(settings);
+    let base_name = agent_workspace_dir_name(conv, settings);
+    let first = root.join(&base_name);
+    if !first.exists() {
+        return first;
+    }
+
+    let id_suffix = short_conversation_id(&conv.id);
+    let with_id = root.join(append_workspace_suffix(&base_name, &id_suffix));
+    if !with_id.exists() {
+        return with_id;
+    }
+
+    for index in 2..10_000 {
+        let name = append_workspace_suffix(&base_name, &format!("{}-{}", id_suffix, index));
+        let path = root.join(name);
+        if !path.exists() {
+            return path;
+        }
+    }
+
+    root.join(append_workspace_suffix(
+        &base_name,
+        &aqbot_core::utils::gen_id()
+            .chars()
+            .take(8)
+            .collect::<String>(),
+    ))
+}
+
+fn append_workspace_suffix(base: &str, suffix: &str) -> String {
+    let safe_suffix = sanitize_workspace_dir_name(suffix);
+    let suffix_part = format!("-{}", safe_suffix);
+    let max_base_len = MAX_AGENT_WORKSPACE_NAME_LEN.saturating_sub(suffix_part.len());
+    let base_part = truncate_workspace_name(base, max_base_len.max(1))
+        .trim_matches(|ch| matches!(ch, '-' | '.' | ' '))
+        .to_string();
+    format!(
+        "{}{}",
+        if base_part.is_empty() {
+            "workspace"
+        } else {
+            &base_part
+        },
+        suffix_part
+    )
+}
+
+fn short_conversation_id(conversation_id: &str) -> String {
+    let prefix = conversation_id.chars().take(8).collect::<String>();
+    sanitize_workspace_dir_name(if prefix.is_empty() { "conv" } else { &prefix })
 }
 
 async fn ensure_agent_assistant_message(
@@ -1527,10 +1693,21 @@ pub async fn agent_get_session(
 
 /// Create default workspace directory under config home and return its path.
 #[tauri::command]
-pub async fn agent_ensure_workspace(conversation_id: String) -> Result<String, String> {
-    let workspace_dir = crate::paths::aqbot_home()
-        .join("workspace")
-        .join(&conversation_id);
+pub async fn agent_ensure_workspace(
+    state: State<'_, AppState>,
+    conversation_id: String,
+) -> Result<String, String> {
+    let mut settings = aqbot_core::repo::settings::get_settings(&state.sea_db)
+        .await
+        .map_err(|e| e.to_string())?;
+    settings.agent_workspace_root =
+        aqbot_core::path_vars::decode_path_opt(&settings.agent_workspace_root);
+
+    let conv = conversation::get_conversation(&state.sea_db, &conversation_id)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let workspace_dir = resolve_agent_workspace_dir(&settings, &conv);
     std::fs::create_dir_all(&workspace_dir)
         .map_err(|e| format!("Failed to create workspace: {}", e))?;
     workspace_dir
@@ -1569,6 +1746,36 @@ mod tests {
     use super::*;
     use std::fs;
     use std::io::{Cursor, Write};
+
+    fn test_conversation(id: &str, created_at: i64) -> aqbot_core::types::Conversation {
+        aqbot_core::types::Conversation {
+            id: id.to_string(),
+            title: "Agent test".to_string(),
+            model_id: "model".to_string(),
+            provider_id: "provider".to_string(),
+            system_prompt: None,
+            temperature: None,
+            max_tokens: None,
+            top_p: None,
+            frequency_penalty: None,
+            search_enabled: false,
+            search_provider_id: None,
+            thinking_budget: None,
+            thinking_level: None,
+            enabled_mcp_server_ids: Vec::new(),
+            enabled_knowledge_base_ids: Vec::new(),
+            enabled_memory_namespace_ids: Vec::new(),
+            message_count: 0,
+            is_pinned: false,
+            is_archived: false,
+            context_compression: false,
+            category_id: None,
+            parent_conversation_id: None,
+            mode: "agent".to_string(),
+            created_at,
+            updated_at: created_at,
+        }
+    }
 
     fn test_docx_bytes(text: &str) -> Vec<u8> {
         let cursor = Cursor::new(Vec::new());
@@ -1652,5 +1859,64 @@ mod tests {
         assert!(result.1.contains("Inspect this"));
         assert!(result.1.contains("agent-notes.docx"));
         assert!(result.1.contains("Agent document context"));
+    }
+
+    #[test]
+    fn agent_workspace_name_uses_selected_strategy() {
+        let conv = test_conversation("conv-12345678", 1_700_000_000);
+        let mut settings = AppSettings::default();
+
+        assert_eq!(agent_workspace_dir_name(&conv, &settings), "conv-12345678");
+
+        settings.agent_workspace_name_strategy = "conversation_id".to_string();
+        assert_eq!(agent_workspace_dir_name(&conv, &settings), "conv-12345678");
+
+        settings.agent_workspace_name_strategy = "created_timestamp".to_string();
+        assert_eq!(agent_workspace_dir_name(&conv, &settings), "1700000000");
+
+        settings.agent_workspace_name_strategy = "created_datetime".to_string();
+        settings.agent_workspace_datetime_format = Some("YYYY-MM-DD-HH:mm:ss".to_string());
+        let expected = {
+            use chrono::{Local, TimeZone};
+            Local
+                .timestamp_opt(1_700_000_000, 0)
+                .single()
+                .unwrap()
+                .format("%Y-%m-%d-%H-%M-%S")
+                .to_string()
+        };
+        assert_eq!(agent_workspace_dir_name(&conv, &settings), expected);
+    }
+
+    #[test]
+    fn agent_workspace_name_is_filesystem_safe_and_bounded() {
+        let raw = format!("bad/name:with*chars?{}", "x".repeat(120));
+
+        let sanitized = sanitize_workspace_dir_name(&raw);
+
+        assert!(!sanitized.contains('/'));
+        assert!(!sanitized.contains(':'));
+        assert!(!sanitized.contains('*'));
+        assert!(!sanitized.contains('?'));
+        assert!(sanitized.len() <= 80);
+    }
+
+    #[test]
+    fn agent_workspace_path_uses_collision_suffixes() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let conv = test_conversation("abcdef12-3456-7890-abcd-ef1234567890", 1_700_000_000);
+        let mut settings = AppSettings::default();
+        settings.agent_workspace_root = Some(temp_dir.path().to_string_lossy().to_string());
+        settings.agent_workspace_name_strategy = "created_timestamp".to_string();
+
+        fs::create_dir_all(temp_dir.path().join("1700000000")).unwrap();
+        fs::create_dir_all(temp_dir.path().join("1700000000-abcdef12")).unwrap();
+
+        let workspace = resolve_agent_workspace_dir(&settings, &conv);
+
+        assert_eq!(
+            workspace.file_name().and_then(|name| name.to_str()),
+            Some("1700000000-abcdef12-2")
+        );
     }
 }

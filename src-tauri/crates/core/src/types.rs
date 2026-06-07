@@ -745,6 +745,12 @@ pub struct AppSettings {
     pub multi_model_display_mode: String,
     /// Render user messages as Markdown (like AI messages). Default: false.
     pub render_user_markdown: bool,
+    /// Agent default workspace root. None uses ~/.aqbot/workspace.
+    pub agent_workspace_root: Option<String>,
+    /// Agent workspace subdirectory naming strategy.
+    pub agent_workspace_name_strategy: String,
+    /// Agent workspace datetime naming format.
+    pub agent_workspace_datetime_format: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -866,6 +872,9 @@ impl Default for AppSettings {
             show_image_models_in_model_selector: false,
             multi_model_display_mode: "tabs".to_string(),
             render_user_markdown: false,
+            agent_workspace_root: None,
+            agent_workspace_name_strategy: "uuid".to_string(),
+            agent_workspace_datetime_format: Some("YYYY-MM-DD-HH-mm-ss".to_string()),
         }
     }
 }
@@ -996,6 +1005,39 @@ mod app_settings_tests {
         let settings: AppSettings =
             serde_json::from_value(json!({})).expect("settings should default missing fields");
         assert!(settings.inherit_conversation_preferences_on_create);
+    }
+
+    #[test]
+    fn agent_workspace_settings_default_and_roundtrip() {
+        let settings = AppSettings::default();
+        assert_eq!(settings.agent_workspace_root, None);
+        assert_eq!(settings.agent_workspace_name_strategy, "uuid");
+        assert_eq!(
+            settings.agent_workspace_datetime_format,
+            Some("YYYY-MM-DD-HH-mm-ss".to_string())
+        );
+
+        let settings: AppSettings = serde_json::from_value(json!({
+            "agent_workspace_root": "/tmp/aqbot-agents",
+            "agent_workspace_name_strategy": "created_datetime",
+            "agent_workspace_datetime_format": "YYYY-MM-DD-HH:mm:ss"
+        }))
+        .expect("settings should deserialize");
+
+        assert_eq!(
+            settings.agent_workspace_root.as_deref(),
+            Some("/tmp/aqbot-agents")
+        );
+        assert_eq!(settings.agent_workspace_name_strategy, "created_datetime");
+        assert_eq!(
+            settings.agent_workspace_datetime_format.as_deref(),
+            Some("YYYY-MM-DD-HH:mm:ss")
+        );
+
+        let settings: AppSettings =
+            serde_json::from_value(json!({})).expect("settings should default missing fields");
+        assert_eq!(settings.agent_workspace_root, None);
+        assert_eq!(settings.agent_workspace_name_strategy, "uuid");
     }
 }
 

@@ -1,6 +1,11 @@
 import { create } from 'zustand';
 import { invoke } from '@/lib/invoke';
-import { DEFAULT_MCP_TOOL_LOOP_MAX_ITERATIONS, type AppSettings } from '@/types';
+import {
+  DEFAULT_AGENT_WORKSPACE_DATETIME_FORMAT,
+  DEFAULT_AGENT_WORKSPACE_NAME_STRATEGY,
+  DEFAULT_MCP_TOOL_LOOP_MAX_ITERATIONS,
+  type AppSettings,
+} from '@/types';
 import { DEFAULT_SHORTCUT_BINDINGS } from '@/lib/shortcuts';
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -98,6 +103,9 @@ const DEFAULT_SETTINGS: AppSettings = {
   show_image_models_in_model_selector: false,
   multi_model_display_mode: 'tabs',
   render_user_markdown: false,
+  agent_workspace_root: null,
+  agent_workspace_name_strategy: DEFAULT_AGENT_WORKSPACE_NAME_STRATEGY,
+  agent_workspace_datetime_format: DEFAULT_AGENT_WORKSPACE_DATETIME_FORMAT,
   // WebDAV sync settings — must be present so stale saves never omit them
   webdav_host: null,
   webdav_username: null,

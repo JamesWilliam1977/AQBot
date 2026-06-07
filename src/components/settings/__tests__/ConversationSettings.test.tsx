@@ -38,6 +38,20 @@ vi.mock('react-i18next', () => ({
         'settings.codeFontFamily': '代码字体',
         'settings.fontDefault': '系统默认',
         'settings.groupMessageStyle': '消息样式',
+        'settings.agentSettings': 'Agent',
+        'settings.agentWorkspaceRoot': '默认工作目录',
+        'settings.agentWorkspaceRootDesc': '新 Agent 对话会在该目录下自动创建独立工作目录。留空时使用 ~/.aqbot/workspace。',
+        'settings.agentWorkspaceRootPlaceholder': '留空使用默认目录',
+        'settings.selectAgentWorkspaceRoot': '选择默认工作目录',
+        'settings.agentWorkspaceNameStrategy': '目录命名格式',
+        'settings.agentWorkspaceNameStrategyUuid': 'UUID',
+        'settings.agentWorkspaceNameStrategyConversationId': '对话 ID',
+        'settings.agentWorkspaceNameStrategyCreatedTimestamp': '创建时间戳',
+        'settings.agentWorkspaceNameStrategyCreatedDatetime': '格式化创建时间',
+        'settings.agentWorkspaceDatetimeFormat': '时间命名格式',
+        'settings.agentWorkspaceDatetimeFormatDesc': '支持 YYYY、MM、DD、HH、mm、ss；非法文件名字符会自动替换为 -。',
+        'settings.agentWorkspacePreview': '预览：2023-11-14-22-13-20',
+        'settings.resetAgentWorkspaceRoot': '重置默认目录',
       };
       return labels[key] ?? fallback ?? key;
     },
@@ -45,7 +59,24 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('antd', () => {
-  const Input = () => null;
+  const Input = ({
+    value,
+    onChange,
+    placeholder,
+    'aria-label': ariaLabel,
+  }: {
+    value?: string;
+    onChange?: React.ChangeEventHandler<HTMLInputElement>;
+    placeholder?: string;
+    'aria-label'?: string;
+  }) => (
+    <input
+      aria-label={ariaLabel ?? placeholder}
+      placeholder={placeholder}
+      value={value ?? ''}
+      onChange={onChange}
+    />
+  );
   Input.TextArea = ({
     value,
     onChange,
@@ -96,6 +127,19 @@ vi.mock('antd', () => {
       />
     ),
     Card: ({ children }: { children?: React.ReactNode }) => <section>{children}</section>,
+    Button: ({
+      children,
+      onClick,
+      'aria-label': ariaLabel,
+    }: {
+      children?: React.ReactNode;
+      onClick?: () => void;
+      'aria-label'?: string;
+    }) => (
+      <button aria-label={ariaLabel} type="button" onClick={onClick}>
+        {children}
+      </button>
+    ),
     Dropdown: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
     theme: {
       useToken: () => ({
@@ -174,6 +218,9 @@ describe('ConversationSettings', () => {
       chat_line_height: 1.7,
       chat_font_family: '',
       chat_font_weight: 400,
+      agent_workspace_root: null,
+      agent_workspace_name_strategy: 'uuid',
+      agent_workspace_datetime_format: 'YYYY-MM-DD-HH-mm-ss',
     };
   });
 
@@ -351,6 +398,37 @@ describe('ConversationSettings', () => {
 
     expect(mocks.saveSettings).toHaveBeenCalledWith({
       inherit_conversation_preferences_on_create: false,
+    });
+  });
+
+  it('saves agent workspace defaults from conversation settings', () => {
+    render(<ConversationSettings />);
+
+    const agentGroup = screen.getByText('Agent').parentElement?.parentElement;
+    expect(agentGroup).not.toBeNull();
+    expect(within(agentGroup as HTMLElement).getByText('默认工作目录')).toBeInTheDocument();
+    expect(within(agentGroup as HTMLElement).getByText('目录命名格式')).toBeInTheDocument();
+    expect(within(agentGroup as HTMLElement).getByText('预览：2023-11-14-22-13-20')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('默认工作目录'), { target: { value: '/tmp/aqbot-agents' } });
+    expect(mocks.saveSettings).toHaveBeenCalledWith({
+      agent_workspace_root: '/tmp/aqbot-agents',
+    });
+
+    const selects = screen.getAllByRole('combobox');
+    fireEvent.change(selects[selects.length - 1], { target: { value: 'created_timestamp' } });
+    expect(mocks.saveSettings).toHaveBeenCalledWith({
+      agent_workspace_name_strategy: 'created_timestamp',
+    });
+
+    fireEvent.change(screen.getByLabelText('时间命名格式'), { target: { value: 'YYYY-MM-DD-HH:mm:ss' } });
+    expect(mocks.saveSettings).toHaveBeenCalledWith({
+      agent_workspace_datetime_format: 'YYYY-MM-DD-HH:mm:ss',
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '重置默认目录' }));
+    expect(mocks.saveSettings).toHaveBeenCalledWith({
+      agent_workspace_root: null,
     });
   });
 });
