@@ -9,6 +9,8 @@ const fetchCliToolStatuses = vi.fn();
 const fetchKeys = vi.fn();
 const connectCliTool = vi.fn();
 const disconnectCliTool = vi.fn();
+const getCodexSessionVisibilityStatus = vi.fn();
+const repairCodexSessionVisibility = vi.fn();
 
 let storeState: Record<string, unknown>;
 
@@ -99,6 +101,8 @@ function buildStoreState(overrides: Record<string, unknown> = {}) {
     fetchKeys,
     connectCliTool,
     disconnectCliTool,
+    getCodexSessionVisibilityStatus,
+    repairCodexSessionVisibility,
     ...overrides,
   };
 }
@@ -129,6 +133,54 @@ describe('GatewayTemplates', () => {
     vi.clearAllMocks();
     connectCliTool.mockResolvedValue(undefined);
     disconnectCliTool.mockResolvedValue(undefined);
+    getCodexSessionVisibilityStatus.mockResolvedValue({
+      targetProvider: 'any',
+      codexHome: '/Users/test/.codex',
+      totalSessionFiles: 5,
+      mismatchedSessionFiles: 2,
+      sqlitePresent: true,
+      sqliteRows: 4,
+      sqliteMismatchedRows: 1,
+      sqliteUserEventRowsNeedingRepair: 1,
+      sqliteCwdRowsNeedingRepair: 0,
+      workspaceRootsNeedingUpdate: 1,
+      statusRows: [
+        {
+          scope: 'sessions',
+          provider: 'any',
+          count: 3,
+          mismatchedCount: 0,
+          status: 'ok',
+        },
+        {
+          scope: 'archived_sessions',
+          provider: 'openai',
+          count: 2,
+          mismatchedCount: 2,
+          status: 'needs_repair',
+        },
+        {
+          scope: 'state_5.sqlite',
+          provider: 'openai',
+          count: 1,
+          mismatchedCount: 1,
+          status: 'needs_repair',
+        },
+      ],
+      encryptedContentWarning: 'encrypted_content warning',
+    });
+    repairCodexSessionVisibility.mockResolvedValue({
+      targetProvider: 'any',
+      changedSessionFiles: 2,
+      skippedLockedSessionFiles: 0,
+      sqliteRowsUpdated: 3,
+      sqliteProviderRowsUpdated: 2,
+      sqliteUserEventRowsUpdated: 1,
+      sqliteCwdRowsUpdated: 0,
+      updatedWorkspaceRoots: 1,
+      backupDir: '/tmp/backup',
+      encryptedContentWarning: null,
+    });
     storeState = buildStoreState();
 
     Object.defineProperty(window, 'matchMedia', {
@@ -268,6 +320,56 @@ describe('GatewayTemplates', () => {
     expect(within(codexCard).queryByText('gateway.cliConnected')).not.toBeInTheDocument();
     expect(within(codexCard).getByRole('button', { name: 'gateway.quickConnect' })).toBeInTheDocument();
     expect(within(codexCard).queryByRole('button', { name: 'gateway.cliDisconnect' })).not.toBeInTheDocument();
+  });
+
+  it('shows Codex-only tools and repairs session visibility from status modal', async () => {
+    renderWithApp();
+
+    const codexCard = getToolCard('Codex');
+    const claudeCard = getToolCard('Claude Code');
+    const openCodeCard = getToolCard('OpenCode');
+
+    expect(within(codexCard).getByRole('button', { name: 'gateway.cliTools' })).toBeInTheDocument();
+    expect(within(claudeCard).queryByRole('button', { name: 'gateway.cliTools' })).not.toBeInTheDocument();
+    expect(within(openCodeCard).queryByRole('button', { name: 'gateway.cliTools' })).not.toBeInTheDocument();
+
+    await userEvent.click(within(codexCard).getByRole('button', { name: 'gateway.cliTools' }));
+    await userEvent.click(await screen.findByText('gateway.codexRepairVisibility'));
+
+    expect(await screen.findByText('gateway.codexRepairVisibilityModalTitle')).toBeInTheDocument();
+    expect(getCodexSessionVisibilityStatus).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('gateway.codexRepairVisibilityCurrentStatus')).toBeInTheDocument();
+    expect(screen.getByText('gateway.codexRepairVisibilityMismatchSummary')).toBeInTheDocument();
+    expect(screen.getByText('archived_sessions')).toBeInTheDocument();
+    expect(screen.getAllByText('openai').length).toBeGreaterThan(0);
+    expect(screen.getByText('encrypted_content warning')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'gateway.codexRepairVisibilityCreateBackup' })).toBeChecked();
+
+    await userEvent.click(screen.getByRole('button', { name: 'gateway.codexRepairVisibilityConfirmOk' }));
+
+    await waitFor(() => {
+      expect(repairCodexSessionVisibility).toHaveBeenCalledWith(true);
+    });
+    await waitFor(() => expect(getCodexSessionVisibilityStatus).toHaveBeenCalledTimes(2));
+    expect(fetchCliToolStatuses).toHaveBeenCalledTimes(2);
+  });
+
+  it('passes the unchecked backup option when repairing Codex session visibility', async () => {
+    renderWithApp();
+
+    const codexCard = getToolCard('Codex');
+    await userEvent.click(within(codexCard).getByRole('button', { name: 'gateway.cliTools' }));
+    await userEvent.click(await screen.findByText('gateway.codexRepairVisibility'));
+
+    const backupCheckbox = await screen.findByRole('checkbox', { name: 'gateway.codexRepairVisibilityCreateBackup' });
+    await userEvent.click(backupCheckbox);
+    expect(backupCheckbox).not.toBeChecked();
+
+    await userEvent.click(screen.getByRole('button', { name: 'gateway.codexRepairVisibilityConfirmOk' }));
+
+    await waitFor(() => {
+      expect(repairCodexSessionVisibility).toHaveBeenCalledWith(false);
+    });
   });
 
   it('shows a warning and disables quick connect actions while the gateway is stopped', async () => {

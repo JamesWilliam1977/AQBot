@@ -1,14 +1,15 @@
 import { useState, useEffect, useCallback, useMemo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Card, Button, Typography, App, Tag, Select } from 'antd';
-import { Zap, ZapOff, RefreshCw, AlertCircle } from 'lucide-react';
+import { Card, Button, Typography, App, Tag, Select, Dropdown } from 'antd';
+import { Zap, ZapOff, RefreshCw, AlertCircle, Wrench } from 'lucide-react';
 import { ClaudeCode } from '@lobehub/icons';
 import { Codex } from '@lobehub/icons';
 import { OpenCode } from '@lobehub/icons';
 import { Gemini } from '@lobehub/icons';
 import { Cursor } from '@lobehub/icons';
+import { CodexSessionVisibilityModal } from './CodexSessionVisibilityModal';
 import { useGatewayStore } from '@/stores/gatewayStore';
-import type { CliToolInfo, QuickConnectProtocol } from '@/types';
+import type { CliToolInfo, CodexSessionVisibilityStatus, QuickConnectProtocol } from '@/types';
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -115,7 +116,9 @@ function ToolCard({
   quickConnectBlocked,
   onConnect,
   onDisconnect,
+  onOpenCodexSessionVisibilityRepair,
   connecting,
+  repairing,
 }: {
   item: QuickConnectItem;
   toolInfo?: CliToolInfo;
@@ -124,7 +127,9 @@ function ToolCard({
   quickConnectBlocked: boolean;
   onConnect: (toolId: string) => void;
   onDisconnect: (toolId: string, restoreBackup: boolean) => void;
+  onOpenCodexSessionVisibilityRepair: () => void;
   connecting: string | null;
+  repairing: string | null;
 }) {
   const { t } = useTranslation();
   const { modal } = App.useApp();
@@ -133,6 +138,7 @@ function ToolCard({
   const connectedProtocol = toolInfo?.connectedProtocol ?? null;
   const displayStatus = status === 'connected' && connectedProtocol == null ? 'not_connected' : status;
   const isConnecting = connecting === item.key;
+  const isRepairing = repairing === item.key;
   const isNotInstalled = displayStatus === 'not_installed';
   const isConnected = displayStatus === 'connected';
   const needsReconnect =
@@ -171,6 +177,20 @@ function ToolCard({
     }
   }, [item.key, toolInfo, onDisconnect, modal, t]);
 
+  const toolMenu = useMemo(() => ({
+    items: [
+      {
+        key: 'repair_visibility',
+        label: t('gateway.codexRepairVisibility'),
+      },
+    ],
+    onClick: ({ key }: { key: string }) => {
+      if (key === 'repair_visibility') {
+        onOpenCodexSessionVisibilityRepair();
+      }
+    },
+  }), [onOpenCodexSessionVisibilityRepair, t]);
+
   return (
     <Card key={item.key} size="small" hoverable className="gateway-quick-connect-card">
       <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
@@ -198,7 +218,7 @@ function ToolCard({
             </Text>
           )}
         </div>
-        <div style={{ flexShrink: 0 }}>
+        <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
           {isConnected && !needsReconnect ? (
             <Button
               danger
@@ -219,6 +239,13 @@ function ToolCard({
               {needsReconnect ? t('gateway.cliSwitchProtocolReconnect') : t('gateway.quickConnect')}
             </Button>
           )}
+          {item.key === 'codex' && (
+            <Dropdown menu={toolMenu} trigger={['click']}>
+              <Button icon={<Wrench size={14} />} loading={isRepairing}>
+                {t('gateway.cliTools')}
+              </Button>
+            </Dropdown>
+          )}
         </div>
       </div>
     </Card>
@@ -237,9 +264,17 @@ export function GatewayTemplates() {
     fetchCliToolStatuses,
     connectCliTool,
     disconnectCliTool,
+    repairCodexSessionVisibility,
+    getCodexSessionVisibilityStatus,
     fetchKeys,
   } = useGatewayStore();
   const [connecting, setConnecting] = useState<string | null>(null);
+  const [repairing, setRepairing] = useState<string | null>(null);
+  const [codexVisibilityModalOpen, setCodexVisibilityModalOpen] = useState(false);
+  const [codexVisibilityStatus, setCodexVisibilityStatus] =
+    useState<CodexSessionVisibilityStatus | null>(null);
+  const [codexVisibilityStatusLoading, setCodexVisibilityStatusLoading] = useState(false);
+  const [codexVisibilityCreateBackup, setCodexVisibilityCreateBackup] = useState(true);
   const enabledKeys = keys.filter((k) => k.enabled && k.has_encrypted_key);
   const quickConnectBlocked = !status.is_running;
   const [selectedKeyId, setSelectedKeyId] = useState<string | undefined>(undefined);
@@ -323,6 +358,52 @@ export function GatewayTemplates() {
     [disconnectCliTool, message, t],
   );
 
+  const loadCodexSessionVisibilityStatus = useCallback(async () => {
+    setCodexVisibilityStatusLoading(true);
+    try {
+      const status = await getCodexSessionVisibilityStatus();
+      setCodexVisibilityStatus(status);
+    } catch (e) {
+      message.error(t('gateway.codexRepairVisibilityError', { error: String(e) }));
+    } finally {
+      setCodexVisibilityStatusLoading(false);
+    }
+  }, [getCodexSessionVisibilityStatus, message, t]);
+
+  const handleOpenCodexSessionVisibilityRepair = useCallback(() => {
+    setCodexVisibilityCreateBackup(true);
+    setCodexVisibilityModalOpen(true);
+    void loadCodexSessionVisibilityStatus();
+  }, [loadCodexSessionVisibilityStatus]);
+
+  const handleRepairCodexSessionVisibility = useCallback(async () => {
+    setRepairing('codex');
+    try {
+      const result = await repairCodexSessionVisibility(codexVisibilityCreateBackup);
+      message.success(t('gateway.codexRepairVisibilitySuccess', {
+        provider: result.targetProvider,
+        sessions: result.changedSessionFiles,
+        rows: result.sqliteRowsUpdated,
+      }));
+      if (result.encryptedContentWarning) {
+        message.warning(result.encryptedContentWarning);
+      }
+      await fetchCliToolStatuses();
+      await loadCodexSessionVisibilityStatus();
+    } catch (e) {
+      message.error(t('gateway.codexRepairVisibilityError', { error: String(e) }));
+    } finally {
+      setRepairing(null);
+    }
+  }, [
+    codexVisibilityCreateBackup,
+    fetchCliToolStatuses,
+    loadCodexSessionVisibilityStatus,
+    message,
+    repairCodexSessionVisibility,
+    t,
+  ]);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
@@ -384,9 +465,21 @@ export function GatewayTemplates() {
           quickConnectBlocked={quickConnectBlocked}
           onConnect={handleConnect}
           onDisconnect={handleDisconnect}
+          onOpenCodexSessionVisibilityRepair={handleOpenCodexSessionVisibilityRepair}
           connecting={connecting}
+          repairing={repairing}
         />
       ))}
+      <CodexSessionVisibilityModal
+        open={codexVisibilityModalOpen}
+        loading={codexVisibilityStatusLoading}
+        repairing={repairing === 'codex'}
+        status={codexVisibilityStatus}
+        createBackup={codexVisibilityCreateBackup}
+        onCreateBackupChange={setCodexVisibilityCreateBackup}
+        onCancel={() => setCodexVisibilityModalOpen(false)}
+        onRepair={handleRepairCodexSessionVisibility}
+      />
     </div>
   );
 }

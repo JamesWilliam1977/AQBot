@@ -15,6 +15,8 @@ import type {
   GatewayRequestLog,
   CliToolInfo,
   QuickConnectProtocol,
+  CodexSessionVisibilityStatus,
+  CodexSessionVisibilityRepairResult,
 } from '@/types';
 
 interface GatewayState {
@@ -65,6 +67,8 @@ interface GatewayState {
   fetchCliToolStatuses: () => Promise<void>;
   connectCliTool: (tool: string, keyId: string, protocol: QuickConnectProtocol) => Promise<void>;
   disconnectCliTool: (tool: string, restoreBackup: boolean) => Promise<void>;
+  getCodexSessionVisibilityStatus: () => Promise<CodexSessionVisibilityStatus>;
+  repairCodexSessionVisibility: (createBackup: boolean) => Promise<CodexSessionVisibilityRepairResult>;
 }
 
 export const useGatewayStore = create<GatewayState>((set) => ({
@@ -332,6 +336,31 @@ export const useGatewayStore = create<GatewayState>((set) => ({
       // Refresh statuses after disconnect
       const cliTools = await invoke<CliToolInfo[]>('get_all_cli_tool_statuses');
       set({ cliTools, error: null });
+    } catch (e) {
+      set({ error: String(e) });
+      throw e;
+    }
+  },
+
+  getCodexSessionVisibilityStatus: async () => {
+    try {
+      const status = await invoke<CodexSessionVisibilityStatus>('get_codex_session_visibility_status');
+      set({ error: null });
+      return status;
+    } catch (e) {
+      set({ error: String(e) });
+      throw e;
+    }
+  },
+
+  repairCodexSessionVisibility: async (createBackup) => {
+    try {
+      const result = await invoke<CodexSessionVisibilityRepairResult>(
+        'repair_codex_session_visibility',
+        { createBackup },
+      );
+      set({ error: null });
+      return result;
     } catch (e) {
       set({ error: String(e) });
       throw e;

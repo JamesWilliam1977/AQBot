@@ -141,6 +141,43 @@ export type CliToolInfo = {
   connectedProtocol: QuickConnectProtocol | null;
 };
 
+export type CodexSessionVisibilityRepairResult = {
+  targetProvider: string;
+  changedSessionFiles: number;
+  skippedLockedSessionFiles: number;
+  sqliteRowsUpdated: number;
+  sqliteProviderRowsUpdated: number;
+  sqliteUserEventRowsUpdated: number;
+  sqliteCwdRowsUpdated: number;
+  sqlitePresent: boolean;
+  updatedWorkspaceRoots: number;
+  backupDir: string | null;
+  encryptedContentWarning: string | null;
+};
+
+export type CodexSessionVisibilityStatusRow = {
+  scope: string;
+  provider: string | null;
+  count: number;
+  mismatchedCount: number;
+  status: 'ok' | 'needs_repair' | string;
+};
+
+export type CodexSessionVisibilityStatus = {
+  targetProvider: string;
+  codexHome: string;
+  totalSessionFiles: number;
+  mismatchedSessionFiles: number;
+  sqlitePresent: boolean;
+  sqliteRows: number;
+  sqliteMismatchedRows: number;
+  sqliteUserEventRowsNeedingRepair: number;
+  sqliteCwdRowsNeedingRepair: number;
+  workspaceRootsNeedingUpdate: number;
+  statusRows: CodexSessionVisibilityStatusRow[];
+  encryptedContentWarning: string | null;
+};
+
 export type DesktopCapabilityKey = 'tray' | 'global_shortcut' | 'protocol_handler' | 'mini_window' | 'artifact_window' | 'notification' | 'devtools_context_menu';
 
 export type DesktopCapability = {

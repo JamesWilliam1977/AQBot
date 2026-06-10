@@ -307,6 +307,8 @@ pub fn run() {
         commands::gateway::get_all_cli_tool_statuses,
         commands::gateway::connect_cli_tool,
         commands::gateway::disconnect_cli_tool,
+        commands::gateway::get_codex_session_visibility_status,
+        commands::gateway::repair_codex_session_visibility,
         commands::gateway::generate_self_signed_cert,
         // messages
         commands::messages::list_messages,

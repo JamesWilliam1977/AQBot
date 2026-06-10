@@ -4,6 +4,7 @@ pub mod chatgpt_import;
 pub mod cherry_import;
 pub mod kelivo_import;
 pub mod cli_config;
+pub mod codex_session_visibility;
 pub mod context_source;
 pub mod conversation;
 pub mod conversation_branch;

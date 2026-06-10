@@ -407,6 +407,24 @@ pub async fn disconnect_cli_tool(
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn get_codex_session_visibility_status() -> Result<CodexSessionVisibilityStatus, String> {
+    aqbot_core::repo::codex_session_visibility::get_codex_session_visibility_status()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn repair_codex_session_visibility(
+    create_backup: Option<bool>,
+) -> Result<CodexSessionVisibilityRepairResult, String> {
+    aqbot_core::repo::codex_session_visibility::repair_codex_session_visibility_with_backup(
+        create_backup.unwrap_or(true),
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
 // ─── Existing Commands ──────────────────────────────────
 
 #[tauri::command]
