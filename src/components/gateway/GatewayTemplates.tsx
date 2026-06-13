@@ -181,6 +181,7 @@ function ToolCard({
     items: [
       {
         key: 'repair_visibility',
+        icon: <Wrench size={14} />,
         label: t('gateway.codexRepairVisibility'),
       },
     ],

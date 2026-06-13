@@ -334,7 +334,9 @@ describe('GatewayTemplates', () => {
     expect(within(openCodeCard).queryByRole('button', { name: 'gateway.cliTools' })).not.toBeInTheDocument();
 
     await userEvent.click(within(codexCard).getByRole('button', { name: 'gateway.cliTools' }));
-    await userEvent.click(await screen.findByText('gateway.codexRepairVisibility'));
+    const repairMenuItem = await screen.findByRole('menuitem', { name: 'gateway.codexRepairVisibility' });
+    expect(repairMenuItem.querySelector('.lucide-wrench')).toBeInTheDocument();
+    await userEvent.click(repairMenuItem);
 
     expect(await screen.findByText('gateway.codexRepairVisibilityModalTitle')).toBeInTheDocument();
     expect(getCodexSessionVisibilityStatus).toHaveBeenCalledTimes(1);
