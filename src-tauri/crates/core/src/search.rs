@@ -45,6 +45,7 @@ pub fn default_endpoint(provider_type: &str) -> &'static str {
         "tavily" => "https://api.tavily.com/search",
         "zhipu" => "https://open.bigmodel.cn/api/paas/v4/web_search",
         "bocha" => "https://api.bochaai.com/v1/web-search",
+        "exa" => "https://api.exa.ai/search",
         _ => "",
     }
 }
@@ -65,6 +66,7 @@ pub async fn execute_search(
         "tavily" => search_tavily(endpoint, api_key, query, max_results, timeout_ms).await,
         "zhipu" => search_zhipu(endpoint, api_key, query, max_results, timeout_ms).await,
         "bocha" => search_bocha(endpoint, api_key, query, max_results, timeout_ms).await,
+        "exa" => search_exa(endpoint, api_key, query, max_results, timeout_ms).await,
         _ => {
             return Err(AQBotError::Validation(format!(
                 "Unsupported provider type: {}",
@@ -381,4 +383,171 @@ async fn search_bocha(
             url: r.url.unwrap_or_default(),
         })
         .collect())
+}
+
+// ── Exa ─────────────────────────────────────────────────
+// POST {endpoint}
+// Header: x-api-key: {apiKey}
+// Body: { query, numResults, type: "auto", contents: { highlights: true } }
+// Response: { results: [{ title, url, highlights, summary, text }] }
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExaRequest<'a> {
+    query: &'a str,
+    num_results: i32,
+    #[serde(rename = "type")]
+    search_type: &'a str,
+    contents: ExaContents,
+}
+
+#[derive(Serialize)]
+struct ExaContents {
+    highlights: bool,
+}
+
+#[derive(Deserialize)]
+struct ExaResponse {
+    results: Vec<ExaResult>,
+}
+
+#[derive(Deserialize)]
+struct ExaResult {
+    title: Option<String>,
+    url: Option<String>,
+    highlights: Option<Vec<String>>,
+    summary: Option<String>,
+    text: Option<String>,
+}
+
+fn exa_result_content(r: &ExaResult) -> String {
+    r.highlights
+        .as_ref()
+        .filter(|highlights| !highlights.is_empty())
+        .map(|highlights| highlights.join("\n\n"))
+        .or_else(|| r.summary.clone())
+        .or_else(|| r.text.clone())
+        .unwrap_or_default()
+}
+
+fn exa_result_to_search_result(r: ExaResult) -> SearchResult {
+    let content = exa_result_content(&r);
+    SearchResult {
+        title: r.title.unwrap_or_else(|| "No title".to_string()),
+        content,
+        url: r.url.unwrap_or_default(),
+    }
+}
+
+async fn search_exa(
+    endpoint: Option<&str>,
+    api_key: &str,
+    query: &str,
+    max_results: i32,
+    timeout_ms: i32,
+) -> Result<Vec<SearchResult>> {
+    let url = endpoint.unwrap_or("https://api.exa.ai/search");
+
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_millis(timeout_ms as u64))
+        .build()
+        .map_err(|e| AQBotError::Provider(format!("HTTP client error: {e}")))?;
+
+    let body = ExaRequest {
+        query,
+        num_results: max_results.clamp(1, 100),
+        search_type: "auto",
+        contents: ExaContents { highlights: true },
+    };
+
+    let resp = client
+        .post(url)
+        .header("x-api-key", api_key)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| AQBotError::Provider(format!("Exa request failed: {e}")))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(AQBotError::Provider(format!(
+            "Exa API error {status}: {text}"
+        )));
+    }
+
+    let data: ExaResponse = resp
+        .json()
+        .await
+        .map_err(|e| AQBotError::Provider(format!("Exa response parse error: {e}")))?;
+
+    Ok(data
+        .results
+        .into_iter()
+        .take(max_results.max(1) as usize)
+        .map(exa_result_to_search_result)
+        .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn exa_request_serializes_current_payload() {
+        let body = ExaRequest {
+            query: "latest docs",
+            num_results: 2,
+            search_type: "auto",
+            contents: ExaContents { highlights: true },
+        };
+
+        assert_eq!(
+            serde_json::to_value(body).unwrap(),
+            json!({
+                "query": "latest docs",
+                "numResults": 2,
+                "type": "auto",
+                "contents": { "highlights": true }
+            })
+        );
+    }
+
+    #[test]
+    fn exa_result_maps_highlights() {
+        let result = exa_result_to_search_result(ExaResult {
+            title: Some("Doc".into()),
+            url: Some("https://example.com/doc".into()),
+            highlights: Some(vec!["first".into(), "second".into()]),
+            summary: Some("summary".into()),
+            text: Some("text".into()),
+        });
+
+        assert_eq!(result.title, "Doc");
+        assert_eq!(result.url, "https://example.com/doc");
+        assert_eq!(result.content, "first\n\nsecond");
+    }
+
+    #[test]
+    fn exa_result_falls_back_to_summary_then_text() {
+        let summary = ExaResult {
+            title: None,
+            url: None,
+            highlights: Some(vec![]),
+            summary: Some("summary content".into()),
+            text: Some("text content".into()),
+        };
+        let text = ExaResult {
+            title: None,
+            url: None,
+            highlights: None,
+            summary: None,
+            text: Some("text content".into()),
+        };
+
+        assert_eq!(exa_result_content(&summary), "summary content");
+        assert_eq!(exa_result_content(&text), "text content");
+    }
 }

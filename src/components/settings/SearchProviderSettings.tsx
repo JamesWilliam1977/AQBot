@@ -17,6 +17,7 @@ import {
 import { Plus, Trash2 } from 'lucide-react';
 import { ProviderIcon } from '@lobehub/icons';
 import Tavily from '@lobehub/icons/es/Tavily';
+import Exa from '@lobehub/icons/es/Exa';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { useSearchStore } from '@/stores';
@@ -28,6 +29,7 @@ function providerSelectOptions(t: (key: string, fallback?: string) => string) {
     { value: 'tavily', label: <span className="flex items-center gap-2"><Tavily.Color size={16} /> Tavily</span> },
     { value: 'zhipu', label: <span className="flex items-center gap-2"><ProviderIcon provider="zhipu" size={16} type="color" /> {t('settings.searchProviders.zhipu')}</span> },
     { value: 'bocha', label: <span className="flex items-center gap-2"><img src="/icons/bocha.ico" alt="" style={{ width: 16, height: 16 }} /> {t('settings.searchProviders.bocha')}</span> },
+    { value: 'exa', label: <span className="flex items-center gap-2"><Exa.Color size={16} /> Exa</span> },
   ];
 }
 
@@ -37,6 +39,7 @@ const DEFAULT_ENDPOINTS: Record<string, string> = {
   tavily: 'https://api.tavily.com/search',
   zhipu: 'https://open.bigmodel.cn/api/paas/v4/web_search',
   bocha: 'https://api.bochaai.com/v1/web-search',
+  exa: 'https://api.exa.ai/search',
 };
 
 // ── Left Sidebar: Provider List ───────────────────────────
