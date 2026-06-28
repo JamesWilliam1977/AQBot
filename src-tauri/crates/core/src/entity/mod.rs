@@ -17,6 +17,7 @@ pub mod models;
 pub mod program_policies;
 pub mod provider_keys;
 pub mod providers;
+pub mod roles;
 pub mod search_citations;
 pub mod search_providers;
 pub mod settings;

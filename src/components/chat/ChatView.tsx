@@ -5,6 +5,7 @@ import type { InputRef } from 'antd';
 import { Pencil, Share2, FileImage, FileCode, FileText, FileType, Bot, Brain, Lightbulb, Code, Languages, Copy, Check, RotateCcw, User, Trash2, ChevronLeft, ChevronRight, ChevronDown, Scissors, Paperclip, AlertCircle, X, ArrowDown, ArrowUp, ArrowLeftRight, Zap, Sparkles, TextCursorInput, GitBranch, ChartNoAxesColumn, MessageSquare, ArrowUpRight, ArrowDownRight, Coins, Clock, Timer, Download, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { ModelIcon } from '@lobehub/icons';
 import { getConvIcon } from '@/lib/convIcon';
+import { getRoleIntro } from '@/lib/roleIntro';
 import { normalizeAutoConversationTitle } from '@/lib/conversationTitle';
 import Bubble from '@ant-design/x/es/bubble';
 import Prompts from '@ant-design/x/es/prompts';
@@ -29,7 +30,7 @@ import {
   useAgentStore,
 } from '@/stores';
 import { setupAgentEventListeners } from '@/stores/agentStore';
-import { useUserProfileStore } from '@/stores/userProfileStore';
+import { useUserProfileStore, type AvatarType } from '@/stores/userProfileStore';
 import { useResolvedDarkMode } from '@/hooks/useResolvedDarkMode';
 import { InputArea } from './InputArea';
 import { ModelSelector } from './ModelSelector';
@@ -2200,6 +2201,11 @@ export function ChatView() {
   }, []);
 
   const activeConversation = conversations.find((c) => c.id === activeConversationId);
+  const activeCustomConvIcon = activeConversation ? getConvIcon(activeConversation.id) : null;
+  const resolvedActiveCustomConvIconSrc = useResolvedAvatarSrc(
+    (activeCustomConvIcon?.type as AvatarType) ?? 'icon',
+    activeCustomConvIcon?.value ?? '',
+  );
   const compressing = compressingConversationId === activeConversationId;
   const isTitleGenerating = activeConversationId != null && titleGeneratingConversationId === activeConversationId;
   const summaryBoundaryLabel = useMemo(() => {
@@ -2213,19 +2219,22 @@ export function ChatView() {
 
   const renderConvIconForChat = useCallback((size: number, modelId?: string | null) => {
     if (!activeConversation) return <Avatar icon={<Bot size={16} />} style={{ background: token.colorPrimary }} size={size} />;
-    const customIcon = getConvIcon(activeConversation.id);
+    const customIcon = activeCustomConvIcon;
     if (customIcon) {
       if (customIcon.type === 'emoji') {
         return <Avatar size={size} style={{ fontSize: Math.round(size * 0.5), backgroundColor: token.colorPrimaryBg }}>{customIcon.value}</Avatar>;
       }
-      return <Avatar size={size} src={customIcon.value} />;
+      const src = customIcon.type === 'file'
+        ? (resolvedActiveCustomConvIconSrc ?? (customIcon.value.startsWith('data:') ? customIcon.value : undefined))
+        : customIcon.value;
+      return <Avatar size={size} src={src} />;
     }
     const mid = modelId ?? activeConversation.model_id;
     if (mid) {
       return <ConversationModelIcon model={mid} size={size} />;
     }
     return <Avatar icon={<Bot size={16} />} style={{ background: token.colorPrimary }} size={size} />;
-  }, [activeConversation, token.colorPrimary, token.colorPrimaryBg]);
+  }, [activeConversation, activeCustomConvIcon, resolvedActiveCustomConvIconSrc, token.colorPrimary, token.colorPrimaryBg]);
 
   const handleChatSidebarToggle = useCallback(() => {
     void saveSettings({ chat_sidebar_collapsed: !chatSidebarCollapsed });
@@ -2912,6 +2921,30 @@ export function ChatView() {
     },
     [activeConversationId, providers, settings, createConversation, messageApi, t],
   );
+
+  const roleIntro = useMemo(() => {
+    if (!activeConversationId || loading || messages.length > 0 || (activeConversation?.message_count ?? 0) > 0) {
+      return null;
+    }
+    return getRoleIntro(activeConversationId);
+  }, [activeConversation?.message_count, activeConversationId, loading, messages.length]);
+
+  const roleIntroPromptItems: PromptsItemType[] = useMemo(
+    () => {
+      if (!roleIntro) return [];
+      return roleIntro.openingQuestions.map((question, index) => ({
+        key: `role-intro-${index}`,
+        label: question,
+      }));
+    },
+    [roleIntro],
+  );
+
+  const handleRoleIntroPromptClick = useCallback((info: { data: PromptsItemType }) => {
+    const text = typeof info.data.label === 'string' ? info.data.label : '';
+    if (!text) return;
+    useConversationStore.getState().setPendingPromptText(text);
+  }, []);
 
   // ── Bubble items (only show active messages) ────────────────────────
   const activeMessages = useMemo(
@@ -4324,17 +4357,41 @@ export function ChatView() {
               </Typography.Text>
             </div>
           ) : (
-            <div className="flex flex-col items-center justify-center h-full" style={{ padding: '0 24px' }}>
-              <Typography.Title level={3} style={{ marginBottom: 24, fontWeight: 500 }}>
-                {greetingText}
-              </Typography.Title>
-              <Prompts
-                items={promptItems}
-                onItemClick={handlePromptClick}
-                wrap
-                style={{ marginTop: 16 }}
-              />
-            </div>
+            roleIntro ? (
+              <div
+                className="flex flex-col items-center justify-center h-full"
+                style={{ padding: '0 24px', textAlign: 'center', gap: 16 }}
+              >
+                {roleIntro.openingMessage ? (
+                  <Typography.Text
+                    type="secondary"
+                    style={{ maxWidth: 620, fontSize: 15, lineHeight: 1.7 }}
+                  >
+                    {roleIntro.openingMessage}
+                  </Typography.Text>
+                ) : null}
+                {roleIntroPromptItems.length > 0 ? (
+                  <Prompts
+                    items={roleIntroPromptItems}
+                    onItemClick={handleRoleIntroPromptClick}
+                    wrap
+                    style={{ marginTop: 4, justifyContent: 'center' }}
+                  />
+                ) : null}
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center h-full" style={{ padding: '0 24px' }}>
+                <Typography.Title level={3} style={{ marginBottom: 24, fontWeight: 500 }}>
+                  {greetingText}
+                </Typography.Title>
+                <Prompts
+                  items={promptItems}
+                  onItemClick={handlePromptClick}
+                  wrap
+                  style={{ marginTop: 16 }}
+                />
+              </div>
+            )
           )
         ) : (
           <>

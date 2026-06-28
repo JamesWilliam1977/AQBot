@@ -510,6 +510,89 @@ pub struct UpdateConversationCategoryInput {
     pub default_frequency_penalty: Option<Option<f64>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Role {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub system_prompt: String,
+    pub opening_message: Option<String>,
+    pub opening_questions: Vec<String>,
+    pub tags: Vec<String>,
+    pub avatar: Option<String>,
+    pub avatar_type: Option<String>,
+    pub avatar_value: Option<String>,
+    pub temperature: Option<f32>,
+    pub top_p: Option<f32>,
+    pub source_kind: String,
+    pub source_ref: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateRoleInput {
+    pub name: String,
+    pub description: Option<String>,
+    pub system_prompt: String,
+    pub opening_message: Option<String>,
+    pub opening_questions: Vec<String>,
+    pub tags: Vec<String>,
+    pub avatar: Option<String>,
+    pub avatar_type: Option<String>,
+    pub avatar_value: Option<String>,
+    pub temperature: Option<f64>,
+    pub top_p: Option<f64>,
+    pub source_kind: Option<String>,
+    pub source_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateRoleInput {
+    pub name: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub description: Option<Option<String>>,
+    pub system_prompt: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub opening_message: Option<Option<String>>,
+    pub opening_questions: Option<Vec<String>>,
+    pub tags: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub avatar: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub avatar_type: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub avatar_value: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub temperature: Option<Option<f64>>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub top_p: Option<Option<f64>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MarketplaceRole {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub tags: Vec<String>,
+    pub avatar: Option<String>,
+    pub avatar_type: Option<String>,
+    pub avatar_value: Option<String>,
+    pub temperature: Option<f32>,
+    pub top_p: Option<f32>,
+    pub source_kind: String,
+    pub source_ref: String,
+    pub marketplace_source: String,
+    pub installed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoleMarketplaceSource {
+    pub id: String,
+    pub name: String,
+    pub default: bool,
+}
+
 // === Gateway System ===
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

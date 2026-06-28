@@ -95,6 +95,92 @@ const CategoryIcon = memo(function CategoryIcon({ cat, size = 14 }: { cat: Conve
   return <FolderOpen size={size - 1} />
 })
 
+const ConversationIcon = memo(function ConversationIcon({
+  conv,
+  isStreaming,
+}: {
+  conv: Conversation
+  isStreaming: boolean
+}) {
+  const { token } = theme.useToken()
+  const { t } = useTranslation()
+  const customIcon = getConvIcon(conv.id)
+  const resolvedSrc = useResolvedAvatarSrc((customIcon?.type as AvatarType) ?? 'icon', customIcon?.value ?? '')
+  let icon: React.ReactNode
+
+  if (customIcon) {
+    if (customIcon.type === 'emoji') {
+      icon = <Avatar size={20} style={{ fontSize: 12, backgroundColor: token.colorPrimaryBg }}>{customIcon.value}</Avatar>
+    } else {
+      const src = customIcon.type === 'file'
+        ? (resolvedSrc ?? (customIcon.value.startsWith('data:') ? customIcon.value : undefined))
+        : customIcon.value
+      icon = <Avatar size={20} src={src} />
+    }
+  } else if (conv.model_id) {
+    icon = <ConversationModelIcon model={conv.model_id} size={20} />
+  } else {
+    icon = <Avatar size={20} style={{ fontSize: 12, backgroundColor: token.colorPrimaryBg, color: token.colorPrimary }}>{(conv.title || '对')[0]}</Avatar>
+  }
+
+  const modeBadge = conv.mode === 'agent' ? t('common.agentMode') : conv.mode === 'role' ? t('nav.roles') : null
+  if (modeBadge) {
+    icon = (
+      <span style={{ position: 'relative', display: 'inline-flex', width: 20, height: 20 }}>
+        {icon}
+        <span
+          style={{
+            position: 'absolute',
+            top: -5,
+            right: -11,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            boxSizing: 'border-box',
+            padding: '0 3px',
+            height: 10,
+            lineHeight: 1,
+            borderRadius: 5,
+            fontSize: 7,
+            fontWeight: 600,
+            whiteSpace: 'nowrap',
+            color: token.colorPrimary,
+            background: token.colorPrimaryBg,
+            border: `1px solid ${token.colorBgContainer}`,
+            pointerEvents: 'none',
+            transform: 'scale(0.9)',
+            transformOrigin: 'right top',
+          }}
+        >
+          {modeBadge}
+        </span>
+      </span>
+    )
+  }
+
+  if (isStreaming) {
+    icon = (
+      <span style={{ position: 'relative', display: 'inline-flex' }}>
+        {icon}
+        <Loader
+          size={10}
+          style={{
+            position: 'absolute',
+            bottom: -3,
+            right: -3,
+            color: token.colorPrimary,
+            background: token.colorBgContainer,
+            borderRadius: '50%',
+            animation: 'spin 1s linear infinite',
+          }}
+        />
+      </span>
+    )
+  }
+
+  return icon
+})
+
 function SortableCategoryLabel({
   cat,
   onCreateConversation,
@@ -543,74 +629,8 @@ export function ChatSidebar() {
   }, [archivedSelectedIds, batchDelete, fetchArchivedConversations, modal, t])
 
   const buildIcon = useCallback((conv: Conversation) => {
-    const isStreaming = streamingConversationId === conv.id
-    const customIcon = getConvIcon(conv.id)
-    let icon: React.ReactNode
-    if (customIcon) {
-      if (customIcon.type === 'emoji') {
-        icon = <Avatar size={20} style={{ fontSize: 12, backgroundColor: token.colorPrimaryBg }}>{customIcon.value}</Avatar>
-      } else {
-        icon = <Avatar size={20} src={customIcon.value} />
-      }
-    } else if (conv.model_id) {
-      icon = <ConversationModelIcon model={conv.model_id} size={20} />
-    } else {
-      icon = <Avatar size={20} style={{ fontSize: 12, backgroundColor: token.colorPrimaryBg, color: token.colorPrimary }}>{(conv.title || '对')[0]}</Avatar>
-    }
-    if (conv.mode === 'agent') {
-      icon = (
-        <span style={{ position: 'relative', display: 'inline-flex', width: 20, height: 20 }}>
-          {icon}
-          <span
-            style={{
-              position: 'absolute',
-              top: -5,
-              right: -11,
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              boxSizing: 'border-box',
-              padding: '0 3px',
-              height: 10,
-              lineHeight: 1,
-              borderRadius: 5,
-              fontSize: 7,
-              fontWeight: 600,
-              whiteSpace: 'nowrap',
-              color: token.colorPrimary,
-              background: token.colorPrimaryBg,
-              border: `1px solid ${token.colorBgContainer}`,
-              pointerEvents: 'none',
-              transform: 'scale(0.9)',
-              transformOrigin: 'right top',
-            }}
-          >
-            Agent
-          </span>
-        </span>
-      )
-    }
-    if (isStreaming) {
-      icon = (
-        <span style={{ position: 'relative', display: 'inline-flex' }}>
-          {icon}
-          <Loader
-            size={10}
-            style={{
-              position: 'absolute',
-              bottom: -3,
-              right: -3,
-              color: token.colorPrimary,
-              background: token.colorBgContainer,
-              borderRadius: '50%',
-              animation: 'spin 1s linear infinite',
-            }}
-          />
-        </span>
-      )
-    }
-    return icon
-  }, [streamingConversationId, token.colorPrimary, token.colorPrimaryBg, token.colorBgContainer])
+    return <ConversationIcon conv={conv} isStreaming={streamingConversationId === conv.id} />
+  }, [streamingConversationId])
 
   const directDeleteShortcutLabel = useMemo(() => getDirectDeleteShortcutLabel(), [])
   const directDeleteHint = t('chat.directDeleteHint', { shortcut: directDeleteShortcutLabel })

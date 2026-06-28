@@ -236,7 +236,7 @@ export interface Conversation {
   context_compression: boolean;
   category_id: string | null;
   parent_conversation_id: string | null;
-  mode?: 'chat' | 'agent';
+  mode?: 'chat' | 'agent' | 'role';
   message_count: number;
   created_at: number;
   updated_at: number;
@@ -379,7 +379,7 @@ export interface UpdateConversationInput {
   enabled_memory_namespace_ids?: string[];
   context_compression?: boolean;
   category_id?: string | null;
-  mode?: 'chat' | 'agent';
+  mode?: 'chat' | 'agent' | 'role';
 }
 
 // === Gateway System ===
@@ -684,7 +684,7 @@ export interface RealtimeConfig {
 }
 
 // === UI State ===
-export type PageKey = 'chat' | 'drawing' | 'knowledge' | 'memory' | 'gateway' | 'files' | 'settings' | 'skills';
+export type PageKey = 'chat' | 'drawing' | 'knowledge' | 'memory' | 'gateway' | 'files' | 'settings' | 'skills' | 'roles';
 
 // === Drawing ===
 export type DrawingModelId = 'gpt-image-2' | 'gpt-image-1.5' | 'gpt-image-1' | 'gpt-image-1-mini';
@@ -861,6 +861,77 @@ export interface SkillUpdateInfo {
   currentCommit: string;
   latestCommit: string;
   sourceRef: string;
+}
+
+export interface Role {
+  id: string;
+  name: string;
+  description: string | null;
+  system_prompt: string;
+  opening_message: string | null;
+  opening_questions: string[];
+  tags: string[];
+  avatar: string | null;
+  avatar_type: string | null;
+  avatar_value: string | null;
+  temperature: number | null;
+  top_p: number | null;
+  source_kind: string;
+  source_ref: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface CreateRoleInput {
+  name: string;
+  description?: string | null;
+  system_prompt: string;
+  opening_message?: string | null;
+  opening_questions: string[];
+  tags: string[];
+  avatar?: string | null;
+  avatar_type?: string | null;
+  avatar_value?: string | null;
+  temperature?: number | null;
+  top_p?: number | null;
+  source_kind?: string | null;
+  source_ref?: string | null;
+}
+
+export interface UpdateRoleInput {
+  name?: string;
+  description?: string | null;
+  system_prompt?: string;
+  opening_message?: string | null;
+  opening_questions?: string[];
+  tags?: string[];
+  avatar?: string | null;
+  avatar_type?: string | null;
+  avatar_value?: string | null;
+  temperature?: number | null;
+  top_p?: number | null;
+}
+
+export interface MarketplaceRole {
+  id: string;
+  name: string;
+  description: string | null;
+  tags: string[];
+  avatar: string | null;
+  avatar_type: string | null;
+  avatar_value: string | null;
+  temperature: number | null;
+  top_p: number | null;
+  source_kind: string;
+  source_ref: string;
+  marketplace_source: string;
+  installed: boolean;
+}
+
+export interface RoleMarketplaceSource {
+  id: string;
+  name: string;
+  default: boolean;
 }
 
 // Phase-2 type modules

@@ -33,6 +33,8 @@ mod m20260501_000001_add_knowledge_base_rerank_settings;
 mod m20260504_000001_split_openai_compatible_provider_types;
 mod m20260515_000001_add_knowledge_base_index_schedule;
 mod m20260518_000001_add_builtin_model_deletions;
+mod m20260627_000001_add_roles;
+mod m20260628_000001_repair_roles_schema;
 
 pub struct Migrator;
 
@@ -73,6 +75,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260504_000001_split_openai_compatible_provider_types::Migration),
             Box::new(m20260515_000001_add_knowledge_base_index_schedule::Migration),
             Box::new(m20260518_000001_add_builtin_model_deletions::Migration),
+            Box::new(m20260627_000001_add_roles::Migration),
+            Box::new(m20260628_000001_repair_roles_schema::Migration),
         ]
     }
 }
@@ -154,6 +158,96 @@ mod tests {
                 .expect("check builtin model deletions table"),
             "missing builtin_model_deletions table"
         );
+    }
+
+    #[tokio::test]
+    async fn migrator_up_adds_roles_table_on_sqlite() {
+        let db = sqlite_test_db().await;
+
+        Migrator::up(&db, None)
+            .await
+            .expect("run sqlite migrations");
+
+        let manager = SchemaManager::new(&db);
+        assert!(
+            manager.has_table("roles").await.expect("check roles table"),
+            "missing roles table"
+        );
+        for column in ["temperature", "top_p", "avatar_type", "avatar_value"] {
+            assert!(
+                manager
+                    .has_column("roles", column)
+                    .await
+                    .expect("check roles column"),
+                "missing roles.{column}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn migrator_up_repairs_existing_roles_table_on_sqlite() {
+        let db = sqlite_test_db().await;
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            r#"
+            CREATE TABLE roles (
+                id varchar NOT NULL PRIMARY KEY,
+                name varchar NOT NULL,
+                description text NULL,
+                system_prompt text NOT NULL,
+                opening_message text NULL,
+                opening_questions_json text NOT NULL DEFAULT '[]',
+                tags_json text NOT NULL DEFAULT '[]',
+                avatar varchar NULL,
+                source_kind varchar NOT NULL DEFAULT 'local',
+                source_ref varchar NULL,
+                created_at bigint NOT NULL,
+                updated_at bigint NOT NULL
+            );
+            INSERT INTO roles (
+                id, name, system_prompt, opening_questions_json, tags_json,
+                avatar, source_kind, created_at, updated_at
+            ) VALUES (
+                'role-old', '旧角色', '旧提示词', '[]', '[]',
+                '🌐', 'local', 1, 1
+            );
+            CREATE TABLE seaql_migrations (
+                version varchar NOT NULL PRIMARY KEY,
+                applied_at bigint NOT NULL
+            );
+            INSERT INTO seaql_migrations (version, applied_at)
+            VALUES ('m20260627_000001_add_roles', 1);
+            "#,
+        ))
+        .await
+        .expect("create old roles schema");
+
+        Migrator::up(&db, None)
+            .await
+            .expect("run sqlite migrations");
+
+        let manager = SchemaManager::new(&db);
+        for column in ["temperature", "top_p", "avatar_type", "avatar_value"] {
+            assert!(
+                manager
+                    .has_column("roles", column)
+                    .await
+                    .expect("check repaired column"),
+                "missing roles.{column}"
+            );
+        }
+
+        let count = db
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT COUNT(*) AS count FROM roles WHERE id = 'role-old'",
+            ))
+            .await
+            .expect("query old role")
+            .expect("old role count row")
+            .try_get_by_index::<i64>(0)
+            .expect("old role count");
+        assert_eq!(count, 1);
     }
 
     #[tokio::test]

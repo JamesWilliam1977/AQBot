@@ -433,6 +433,48 @@ function svgDataUrl(label: string, color = '#f97316'): string {
   return `data:image/svg+xml;base64,${encoded}`;
 }
 
+const MARKETPLACE_ROLES = [
+  {
+    id: 'prompts-chat-english-translator',
+    name: 'English Translator and Improver',
+    description: '把输入翻译成英文并改写得更自然。',
+    system_prompt: 'Act as an English translator and writing improver. Translate the user input into fluent, natural English.',
+    opening_message: 'Send text to translate or polish in English.',
+    opening_questions: ['Translate this paragraph'],
+    tags: ['translation', 'writing'],
+    avatar: '🌐',
+    avatar_type: 'emoji',
+    avatar_value: '🌐',
+    temperature: null,
+    top_p: null,
+    source_kind: 'prompts-chat',
+    source_ref: 'prompts-chat://english-translator-and-improver',
+    marketplace_source: 'prompts-chat',
+  },
+  {
+    id: 'plexpt-zh-ielts-writing-examiner',
+    name: '雅思写作考官',
+    description: '按雅思写作评分维度给出建议。',
+    system_prompt: '你是雅思写作考官。请根据雅思写作评分维度评价用户作文并给出修改建议。',
+    opening_message: '把你的雅思作文发给我。',
+    opening_questions: ['评估这篇作文'],
+    tags: ['中文', '写作'],
+    avatar: '📝',
+    avatar_type: 'emoji',
+    avatar_value: '📝',
+    temperature: null,
+    top_p: null,
+    source_kind: 'plexpt-zh',
+    source_ref: 'plexpt-zh://雅思写作考官',
+    marketplace_source: 'plexpt-zh',
+  },
+];
+
+const ROLE_MARKETPLACE_SOURCES = [
+  { id: 'prompts-chat', name: 'prompts.chat', default: true },
+  { id: 'plexpt-zh', name: 'PlexPt 中文', default: false },
+];
+
 // ── Command Handler ─────────────────────────────────────────────────────
 
 export async function handleCommand<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -1683,6 +1725,86 @@ export async function handleCommand<T>(cmd: string, args?: Record<string, unknow
       return { conversations: [], providers: [], settings: {}, captured_at: nowTs() } as T;
     case 'update_workspace_snapshot':
       return undefined as T;
+
+    // ── Roles ─────────────────────────────────────────────────────────
+    case 'list_roles':
+      return getStore<any[]>('roles', []) as T;
+    case 'get_role': {
+      const role = getStore<any[]>('roles', []).find((item) => item.id === (args as any)?.id);
+      if (!role) throw new Error('Role not found');
+      return role as T;
+    }
+    case 'create_role': {
+      const input = (args as any)?.input;
+      const now = nowTs();
+      const role = {
+        id: genId(),
+        ...input,
+        description: input.description ?? null,
+        opening_message: input.opening_message ?? null,
+        opening_questions: input.opening_questions ?? [],
+        tags: input.tags ?? [],
+        avatar: input.avatar ?? null,
+        avatar_type: input.avatar_type ?? (input.avatar ? 'emoji' : null),
+        avatar_value: input.avatar_value ?? input.avatar ?? null,
+        temperature: input.temperature ?? null,
+        top_p: input.top_p ?? null,
+        source_kind: input.source_kind ?? 'local',
+        source_ref: input.source_ref ?? null,
+        created_at: now,
+        updated_at: now,
+      };
+      const roles = getStore<any[]>('roles', []);
+      setStore('roles', [role, ...roles]);
+      return role as T;
+    }
+    case 'update_role': {
+      const { id, input } = args as any;
+      const roles = getStore<any[]>('roles', []);
+      const idx = roles.findIndex((item) => item.id === id);
+      if (idx === -1) throw new Error('Role not found');
+      roles[idx] = { ...roles[idx], ...input, updated_at: nowTs() };
+      setStore('roles', roles);
+      return roles[idx] as T;
+    }
+    case 'delete_role': {
+      setStore('roles', getStore<any[]>('roles', []).filter((item) => item.id !== (args as any)?.id));
+      return undefined as T;
+    }
+    case 'list_role_marketplace_sources':
+      return ROLE_MARKETPLACE_SOURCES as T;
+    case 'search_role_marketplace': {
+      const query = String((args as any)?.query ?? '').trim().toLowerCase();
+      const sourceId = String((args as any)?.sourceId ?? 'prompts-chat');
+      const installedRefs = new Set(getStore<any[]>('roles', []).map((role) => role.source_ref).filter(Boolean));
+      return MARKETPLACE_ROLES
+        .filter((role) => role.marketplace_source === sourceId)
+        .filter((role) => !query || role.name.toLowerCase().includes(query) || role.description.toLowerCase().includes(query))
+        .map((role) => ({
+          id: role.id,
+          name: role.name,
+          description: role.description,
+          tags: role.tags,
+          avatar: role.avatar,
+          avatar_type: role.avatar_type ?? (role.avatar ? 'emoji' : null),
+          avatar_value: role.avatar_value ?? role.avatar ?? null,
+          temperature: role.temperature ?? null,
+          top_p: role.top_p ?? null,
+          source_kind: role.source_kind,
+          source_ref: role.source_ref,
+          marketplace_source: role.marketplace_source,
+          installed: installedRefs.has(role.source_ref),
+        })) as T;
+    }
+    case 'install_role': {
+      const { sourceRef } = args as any;
+      const entry = MARKETPLACE_ROLES.find((role) => role.source_ref === sourceRef);
+      if (!entry) throw new Error('Role source not found');
+      const now = nowTs();
+      const role = { ...entry, id: genId(), created_at: now, updated_at: now };
+      setStore('roles', [role, ...getStore<any[]>('roles', [])]);
+      return role as T;
+    }
 
     // ── Proxy Test ────────────────────────────────────────────────────────
     case 'test_proxy': {

@@ -2034,6 +2034,10 @@ fn truncate_auto_title(text: &str) -> String {
     }
 }
 
+fn should_auto_generate_title(is_first_message: bool, conversation_mode: &str) -> bool {
+    is_first_message && conversation_mode != "role"
+}
+
 fn truncate_chars(text: &str, limit: usize) -> String {
     text.chars().take(limit).collect()
 }
@@ -3423,7 +3427,7 @@ fn spawn_stream_task(
         }
 
         // Auto-title: if this is the first user message, set conversation title
-        if is_first_message {
+        if should_auto_generate_title(is_first_message, &conversation.mode) {
             // Set truncated title immediately for instant feedback
             let fallback_title = normalize_auto_conversation_title(&user_content);
 
@@ -5533,6 +5537,14 @@ mod tests {
             clean_generated_title(title),
             title.chars().take(30).collect::<String>() + "..."
         );
+    }
+
+    #[test]
+    fn should_auto_generate_title_skips_role_conversations() {
+        assert!(!should_auto_generate_title(true, "role"));
+        assert!(should_auto_generate_title(true, "chat"));
+        assert!(should_auto_generate_title(true, "agent"));
+        assert!(!should_auto_generate_title(false, "chat"));
     }
 
     #[test]

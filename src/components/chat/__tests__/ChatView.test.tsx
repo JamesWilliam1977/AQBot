@@ -156,6 +156,15 @@ describe('ChatView assistant display policy', () => {
     expect(source).not.toMatch(/listMessageVersions\([\s\S]*?\], \[[^\]]*messagesLength[^\]]*\]\);/);
   });
 
+  it('renders role intro prompts for empty role conversations', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/components/chat/ChatView.tsx'), 'utf8');
+
+    expect(source).toContain('getRoleIntro');
+    expect(source).toContain('roleIntro.openingMessage');
+    expect(source).toContain('roleIntro.openingQuestions');
+    expect(source).toContain('setPendingPromptText');
+  });
+
   it('injects a web-search display card for normal assistant replies with searched parent messages', () => {
     const user = makeMessage({
       id: 'user-1',

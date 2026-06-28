@@ -119,6 +119,8 @@ vi.mock('react-i18next', () => ({
       'chat.generateTitle': '生成标题',
       'chat.generatingTitle': '正在生成标题',
       'chat.export': '导出',
+      'common.agentMode': 'Agent',
+      'nav.roles': 'Role Label',
     }[key] ?? key),
   }),
 }));
@@ -332,6 +334,22 @@ describe('ChatSidebar direct delete shortcut', () => {
       textOverflow: 'ellipsis',
       whiteSpace: 'nowrap',
     });
+  });
+
+  it('uses i18n for the role badge on role conversations', () => {
+    conversationState.conversations[0].mode = 'role';
+
+    render(<ChatSidebar />);
+
+    expect(screen.getByText('Role Label')).toBeInTheDocument();
+  });
+
+  it('keeps the agent badge on agent conversations', () => {
+    conversationState.conversations[0].mode = 'agent';
+
+    render(<ChatSidebar />);
+
+    expect(screen.getByText('Agent')).toBeInTheDocument();
   });
 
   it('turns the more trigger into direct delete while Ctrl is held', async () => {

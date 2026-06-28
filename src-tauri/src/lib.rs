@@ -480,6 +480,15 @@ pub fn run() {
         commands::skills::open_skill_dir,
         commands::skills::search_marketplace,
         commands::skills::check_skill_updates,
+        // roles
+        commands::roles::list_roles,
+        commands::roles::get_role,
+        commands::roles::create_role,
+        commands::roles::update_role,
+        commands::roles::delete_role,
+        commands::roles::list_role_marketplace_sources,
+        commands::roles::search_role_marketplace,
+        commands::roles::install_role,
     ]);
     tracing::info!("Attached Tauri invoke handler");
 

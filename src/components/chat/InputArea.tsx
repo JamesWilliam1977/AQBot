@@ -226,7 +226,7 @@ export function InputArea() {
   const compressContext = useConversationStore((s) => s.compressContext);
 
   const activeConversation = conversations.find((c) => c.id === activeConversationId);
-  const currentMode = activeConversation?.mode || 'chat';
+  const currentMode = activeConversation?.mode === 'agent' ? 'agent' : 'chat';
 
   const setActivePage = useUIStore((s) => s.setActivePage);
   const setSettingsSection = useUIStore((s) => s.setSettingsSection);

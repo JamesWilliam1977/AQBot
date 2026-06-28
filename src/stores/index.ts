@@ -19,5 +19,6 @@ export { useMemoryStore } from './memoryStore';
 export { useBackupStore } from './backupStore';
 export { useAgentStore } from './agentStore';
 export { useSkillStore } from './skillStore';
+export { useRoleStore } from './roleStore';
 export { useDrawingStore } from './drawingStore';
 export { useDrawingSettingsStore } from './drawingSettingsStore';
